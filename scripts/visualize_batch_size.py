@@ -2,14 +2,14 @@
 """
 Visualize batch size compression benchmark results.
 
-Generates plots showing compression ratio vs batch size for different
-compression methods (zstd, OpenZL) and formats (OTLP, OTAP).
+Generates plots showing compression ratio, compression time, and decompression time
+vs batch size for different compression methods (zstd, OpenZL) and formats (OTLP, OTAP).
 """
 
 import argparse
 import json
 from pathlib import Path
-from typing import Callable, Dict, List
+from typing import Dict, List, Tuple
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -21,7 +21,6 @@ def load_results(input_path: Path) -> List[Dict]:
     """Load benchmark results from JSON file."""
     with open(input_path) as f:
         data = json.load(f)
-        # Handle both {"results": [...]} and [...] formats
         if isinstance(data, dict) and "results" in data:
             return data["results"]
         return data
@@ -38,76 +37,148 @@ def group_by_dataset(results: List[Dict]) -> Dict[str, List[Dict]]:
     return grouped
 
 
-def extract_series(
-    dataset_results: List[Dict],
-    format: str,
-    value_fn: Callable[[Dict, float], float],
-) -> tuple:
+def extract_compression_ratio_series(
+    dataset_results: List[Dict], compressor: str, method: str
+) -> Tuple[List[int], List[float]]:
     """
-    Extract batch sizes and values for a specific format.
+    Extract batch sizes and compression ratios for a specific compressor/method combo.
+
+    For OTAP, the ratio is computed as otlp_raw / otap_compressed to show
+    compression relative to the original OTLP format.
 
     Args:
         dataset_results: All results for a dataset
-        format: 'otlp' or 'otap'
-        value_fn: Function (result, baseline_bytes) -> value
+        compressor: 'otap', 'otlp_metrics', or 'otlp_traces'
+        method: 'zstd', 'openzl', or 'raw' (uncompressed)
 
     Returns:
-        (batch_sizes, values) sorted by batch size
+        (batch_sizes, ratios) sorted by batch size
     """
-
-    # Filter for specific format (handle both "format" and "compressor" fields)
-    def matches_format(r):
-        compressor = r.get("format") or r.get("compressor", "")
-        if format == "otlp":
-            return compressor.startswith("otlp")
-        return compressor == format
-
-    filtered = [r for r in dataset_results if matches_format(r)]
-
-    # Sort by batch size
+    filtered = [r for r in dataset_results if r["compressor"] == compressor]
     filtered.sort(key=lambda x: x["batch_size"])
 
-    # Extract data
-    batch_sizes = [r["batch_size"] for r in filtered]
+    # For OTAP, we need to use OTLP uncompressed bytes as the baseline
+    if compressor == "otap":
+        # Build lookup of OTLP uncompressed bytes by batch_size
+        otlp_baseline = {}
+        for r in dataset_results:
+            if r["compressor"] in ("otlp_metrics", "otlp_traces"):
+                otlp_baseline[r["batch_size"]] = r["total_uncompressed_bytes"]
 
-    # Get OTLP baseline (uncompressed) sizes by batch_size for ratio calculations
-    otlp_baseline = {}
-    for r in dataset_results:
-        compressor = r.get("format") or r.get("compressor", "")
-        if compressor.startswith("otlp"):
+        batch_sizes = []
+        ratios = []
+        for r in filtered:
             batch_size = r["batch_size"]
-            otlp_baseline[batch_size] = r["total_uncompressed_bytes"]
+            if batch_size in otlp_baseline:
+                batch_sizes.append(batch_size)
+                if method == "raw":
+                    # OTAP raw = otlp_raw / otap_uncompressed
+                    ratios.append(otlp_baseline[batch_size] / r["total_uncompressed_bytes"])
+                else:
+                    compressed_bytes = r[method]["total_bytes"]
+                    ratios.append(otlp_baseline[batch_size] / compressed_bytes)
+        return batch_sizes, ratios
+    else:
+        batch_sizes = [r["batch_size"] for r in filtered]
+        ratios = [r[method]["compression_ratio"] for r in filtered]
+        return batch_sizes, ratios
 
-    # Calculate values using the provided function
-    values = []
-    for r in filtered:
-        batch_size = r["batch_size"]
-        baseline_bytes = otlp_baseline.get(batch_size, r["total_uncompressed_bytes"])
-        values.append(value_fn(r, baseline_bytes))
 
-    return batch_sizes, values
+def extract_time_series(
+    dataset_results: List[Dict], compressor: str, method: str, time_type: str
+) -> Tuple[List[int], List[float], List[float]]:
+    """
+    Extract batch sizes, times, and std devs for a specific compressor/method/time combo.
+
+    Args:
+        dataset_results: All results for a dataset
+        compressor: 'otap', 'otlp_metrics', or 'otlp_traces'
+        method: 'zstd' or 'openzl'
+        time_type: 'compression' or 'decompression'
+
+    Returns:
+        (batch_sizes, times_ms, stds_ms) sorted by batch size
+    """
+    filtered = [r for r in dataset_results if r["compressor"] == compressor]
+    filtered.sort(key=lambda x: x["batch_size"])
+
+    batch_sizes = [r["batch_size"] for r in filtered]
+    times = [r[method][time_type]["avg_ms"] for r in filtered]
+    stds = [r[method][time_type]["std_ms"] for r in filtered]
+
+    return batch_sizes, times, stds
+
+
+def extract_throughput_series(
+    dataset_results: List[Dict], compressor: str, method: str, time_type: str
+) -> Tuple[List[int], List[float], List[float]]:
+    """
+    Extract batch sizes, throughputs, and std devs.
+
+    Args:
+        dataset_results: All results for a dataset
+        compressor: 'otap', 'otlp_metrics', or 'otlp_traces'
+        method: 'zstd' or 'openzl'
+        time_type: 'compression' or 'decompression'
+
+    Returns:
+        (batch_sizes, throughputs_mbps, stds_mbps) sorted by batch size
+    """
+    filtered = [r for r in dataset_results if r["compressor"] == compressor]
+    filtered.sort(key=lambda x: x["batch_size"])
+
+    batch_sizes = [r["batch_size"] for r in filtered]
+    throughputs = [r[method][time_type]["throughput_mbps"] for r in filtered]
+    stds = [r[method][time_type]["throughput_std_mbps"] for r in filtered]
+
+    return batch_sizes, throughputs, stds
+
+
+def get_series_configs():
+    """
+    Return series configurations for plotting.
+
+    Each config: (compressor, method, label, color, marker, linestyle)
+    """
+    return [
+        ("otap", "openzl", "OTAP + OpenZL", "red", "D", "-"),
+        ("otap", "zstd", "OTAP + zstd", "blue", "^", "-"),
+        ("otlp_metrics", "openzl", "OTLP + OpenZL", "red", "s", ":"),
+        ("otlp_metrics", "zstd", "OTLP + zstd", "blue", "o", ":"),
+        ("otlp_traces", "openzl", "OTLP + OpenZL", "red", "s", ":"),
+        ("otlp_traces", "zstd", "OTLP + zstd", "blue", "o", ":"),
+    ]
+
+
+def get_compression_ratio_series_configs():
+    """
+    Return series configurations for compression ratio plots (includes OTAP raw).
+
+    Each config: (compressor, method, label, color, marker, linestyle)
+    method can be 'zstd', 'openzl', or 'raw' (uncompressed)
+    """
+    return [
+        ("otap", "openzl", "OTAP + OpenZL", "red", "D", "-"),
+        ("otap", "zstd", "OTAP + zstd", "blue", "^", "-"),
+        ("otap", "raw", "OTAP raw", "gray", "x", "-"),
+        ("otlp_metrics", "openzl", "OTLP + OpenZL", "red", "s", ":"),
+        ("otlp_metrics", "zstd", "OTLP + zstd", "blue", "o", ":"),
+        ("otlp_traces", "openzl", "OTLP + OpenZL", "red", "s", ":"),
+        ("otlp_traces", "zstd", "OTLP + zstd", "blue", "o", ":"),
+    ]
 
 
 def plot_compression_ratio(
     dataset_name: str, dataset_results: List[Dict], output_dir: Path
 ):
-    """
-    Create a plot for a single dataset showing compression ratios.
-    """
+    """Create compression ratio vs batch size plot."""
     _, ax = plt.subplots(figsize=(10, 6))
 
-    # Define the 5 series to plot: (format, value_fn, label, color, marker, linestyle)
-    series_configs = [
-        ("otap", lambda r, b: b / r["total_openzl_bytes"], "OTAP + OpenZL", "red", "D", "-"),
-        ("otap", lambda r, b: b / r["total_zstd_bytes"], "OTAP + zstd", "blue", "^", "-"),
-        ("otap", lambda r, b: b / r["total_uncompressed_bytes"], "OTAP raw", "gray", "x", ":"),
-        ("otlp", lambda r, b: b / r["total_openzl_bytes"], "OTLP + OpenZL", "red", "s", "--"),
-        ("otlp", lambda r, b: b / r["total_zstd_bytes"], "OTLP + zstd", "blue", "o", "--"),
-    ]
-
-    for format_type, value_fn, label, color, marker, linestyle in series_configs:
-        batch_sizes, ratios = extract_series(dataset_results, format_type, value_fn)
-        if batch_sizes:  # Only plot if we have data
+    for compressor, method, label, color, marker, linestyle in get_compression_ratio_series_configs():
+        batch_sizes, ratios = extract_compression_ratio_series(
+            dataset_results, compressor, method
+        )
+        if batch_sizes:
             ax.plot(
                 batch_sizes,
                 ratios,
@@ -119,15 +190,13 @@ def plot_compression_ratio(
                 markersize=8,
             )
 
-    # Formatting
     ax.set_xlabel("Batch Size", fontsize=12)
     ax.set_ylabel("Compression Ratio", fontsize=12)
     ax.set_title(f"{dataset_name} - Compression Ratio vs Batch Size", fontsize=14)
-    ax.set_xscale("log")  # Log scale for batch size
+    ax.set_xscale("log")
     ax.grid(True, alpha=0.3)
-    ax.legend(loc="best", fontsize=10)
+    ax.legend(loc="best", fontsize=10, handlelength=3)
 
-    # Save plot
     output_file = output_dir / f"{dataset_name}_compression_ratio.png"
     plt.tight_layout()
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
@@ -142,54 +211,36 @@ def plot_time(
     output_dir: Path,
     time_type: str,
 ):
-    """
-    Create a plot for a single dataset showing compression or decompression times.
-
-    Args:
-        dataset_name: Name of the dataset
-        dataset_results: All results for the dataset
-        output_dir: Directory to save plots
-        time_type: 'compression' or 'decompression'
-    """
+    """Create compression/decompression time vs batch size plot with error bars."""
     _, ax = plt.subplots(figsize=(10, 6))
 
-    # Helper to create time extraction lambda
-    def time_fn(field: str) -> Callable[[Dict, float], float]:
-        return lambda r, _: r[field] * r["num_payloads"] / 1000.0
-
-    # Define the 4 series to plot: (format, value_fn, label, color, marker, linestyle)
-    series_configs = [
-        ("otap", time_fn(f"avg_openzl_{time_type}_time_ms"), "OTAP + OpenZL", "red", "D", "-"),
-        ("otap", time_fn(f"avg_zstd_{time_type}_time_ms"), "OTAP + zstd", "blue", "^", "-"),
-        ("otlp", time_fn(f"avg_openzl_{time_type}_time_ms"), "OTLP + OpenZL", "red", "s", "--"),
-        ("otlp", time_fn(f"avg_zstd_{time_type}_time_ms"), "OTLP + zstd", "blue", "o", "--"),
-    ]
-
-    for format_type, value_fn, label, color, marker, linestyle in series_configs:
-        batch_sizes, times = extract_series(dataset_results, format_type, value_fn)
-        if batch_sizes:  # Only plot if we have data
-            ax.plot(
+    for compressor, method, label, color, marker, linestyle in get_series_configs():
+        batch_sizes, times, stds = extract_time_series(
+            dataset_results, compressor, method, time_type
+        )
+        if batch_sizes:
+            ax.errorbar(
                 batch_sizes,
                 times,
+                yerr=stds,
                 label=label,
                 color=color,
                 marker=marker,
                 linestyle=linestyle,
                 linewidth=2,
                 markersize=8,
+                capsize=4,
             )
 
-    # Formatting
     ax.set_xlabel("Batch Size", fontsize=12)
-    ax.set_ylabel(f"{time_type.capitalize()} Time (s)", fontsize=12)
+    ax.set_ylabel(f"{time_type.capitalize()} Time (ms)", fontsize=12)
     ax.set_title(
         f"{dataset_name} - {time_type.capitalize()} Time vs Batch Size", fontsize=14
     )
-    ax.set_xscale("log")  # Log scale for batch size
+    ax.set_xscale("log")
     ax.grid(True, alpha=0.3)
-    ax.legend(loc="best", fontsize=10)
+    ax.legend(loc="best", fontsize=10, handlelength=3)
 
-    # Save plot
     output_file = output_dir / f"{dataset_name}_{time_type}_time.png"
     plt.tight_layout()
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
@@ -198,13 +249,58 @@ def plot_time(
     print(f"Saved: {output_file}")
 
 
+def plot_throughput(
+    dataset_name: str,
+    dataset_results: List[Dict],
+    output_dir: Path,
+    time_type: str,
+):
+    """Create throughput vs batch size plot with error bars."""
+    _, ax = plt.subplots(figsize=(10, 6))
+
+    for compressor, method, label, color, marker, linestyle in get_series_configs():
+        batch_sizes, throughputs, stds = extract_throughput_series(
+            dataset_results, compressor, method, time_type
+        )
+        if batch_sizes:
+            ax.errorbar(
+                batch_sizes,
+                throughputs,
+                yerr=stds,
+                label=label,
+                color=color,
+                marker=marker,
+                linestyle=linestyle,
+                linewidth=2,
+                markersize=8,
+                capsize=4,
+            )
+
+    ax.set_xlabel("Batch Size", fontsize=12)
+    ax.set_ylabel(f"{time_type.capitalize()} Throughput (MB/s)", fontsize=12)
+    ax.set_title(
+        f"{dataset_name} - {time_type.capitalize()} Throughput vs Batch Size",
+        fontsize=14,
+    )
+    ax.set_xscale("log")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best", fontsize=10, handlelength=3)
+
+    output_file = output_dir / f"{dataset_name}_{time_type}_throughput.png"
+    plt.tight_layout()
+    plt.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print(f"Saved: {output_file}")
+
+
 def plot_dataset(dataset_name: str, dataset_results: List[Dict], output_dir: Path):
-    """
-    Create all plots for a single dataset.
-    """
+    """Create all plots for a single dataset."""
     plot_compression_ratio(dataset_name, dataset_results, output_dir)
     plot_time(dataset_name, dataset_results, output_dir, "compression")
     plot_time(dataset_name, dataset_results, output_dir, "decompression")
+    plot_throughput(dataset_name, dataset_results, output_dir, "compression")
+    plot_throughput(dataset_name, dataset_results, output_dir, "decompression")
 
 
 def main():
@@ -214,8 +310,8 @@ def main():
     parser.add_argument(
         "input",
         nargs="?",
-        default="../data/batch_size_results.json",
-        help="Path to input JSON file (default: ../data/batch_size_results.json)",
+        default="../data/benchmark_results.json",
+        help="Path to input JSON file (default: ../data/benchmark_results.json)",
     )
     parser.add_argument(
         "--output-dir",
@@ -230,23 +326,17 @@ def main():
     input_path = (script_dir / args.input).resolve()
     output_dir = (script_dir / args.output_dir).resolve()
 
-    # Validate input
     if not input_path.exists():
         print(f"Error: Input file not found: {input_path}")
         return 1
 
-    # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load and process data
     print(f"Loading results from: {input_path}")
     results = load_results(input_path)
-
     print(f"Loaded {len(results)} results")
 
-    # Group by dataset and plot
     grouped = group_by_dataset(results)
-
     print(f"Found {len(grouped)} datasets: {list(grouped.keys())}")
 
     for dataset_name, dataset_results in grouped.items():

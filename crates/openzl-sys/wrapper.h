@@ -17,5 +17,11 @@
 #include <openzl/zl_decompress.h>
 #include <openzl/zl_compressor.h>
 
+// Input metadata (for clustering tags)
+#include <openzl/zl_input.h>
+
 // Compressor serialization (for loading .zl files)
 #include <openzl/zl_compressor_serialization.h>
+
+// Proto-aware compression (requires protobuf)
+#include <tools/protobuf/proto_compress.h>
