@@ -2,22 +2,6 @@
 
 Consolidated Rust workspace for evaluating OpenZL compression performance on OpenTelemetry data.
 
-## Project Status
-
-**✅ All Phases Complete!**
-
-All implementation phases (0-7) have been successfully completed:
-- ✅ Cargo workspace with 5 crates (openzl-sys, openzl, otel-data, rebatch, benchmarks)
-- ✅ Git submodules (openzl@evaluation, otel-arrow@main)
-- ✅ OTAP parser removed (not needed)
-- ✅ otel-data crate with multipart reader/writer for OTLP
-- ✅ rebatch tool (Rust port with CLI)
-- ✅ benchmarks (Rust port with direct library usage, no external processes)
-- ✅ Python training script updated
-- ✅ Testdata files copied
-
-See [STATUS.md](STATUS.md) for detailed implementation status.
-
 ## Quick Start
 
 ### Prerequisites
@@ -41,22 +25,22 @@ g++ --version
 git submodule update --init --recursive
 cd otel-arrow && git submodule update --init --recursive && cd ..
 
-# Build OpenZL (already done if you see openzl/build-install/)
-# cd openzl/build-install && cmake -DCMAKE_INSTALL_PREFIX=$(pwd) -DOPENZL_BUILD_PROTOBUF_TOOLS=ON .. && make -j16 && cd ../..
+# Build OpenZL
+cd openzl
+mkdir -p build-install && cd build-install
+cmake -DCMAKE_BUILD_TYPE=Release -DOPENZL_BUILD_MODE=opt -DOPENZL_BUILD_PROTOBUF_TOOLS=ON -DCMAKE_INSTALL_PREFIX=./ ..
+make -j$(nproc) && make install
+cd ../..
 
-# Build Rust crates (openzl-sys and openzl are ready)
-cargo build --release -p openzl-sys
-cargo build --release -p openzl
+# Build Rust workspace
+cargo build --release
 ```
 
 ### Workflow
 
 1. **Rebatch testdata**:
    ```bash
-   cargo run --release --bin rebatch -- \
-       --input testdata/astronomy-otelmetrics.zst \
-       --mode metrics \
-       --batch-size 10,100,1000
+   cd go && go run ./cmd/rebatch
    ```
 
 2. **Train compressors**:
@@ -67,81 +51,55 @@ cargo build --release -p openzl
 3. **Run benchmarks**:
    ```bash
    cargo run --release --bin benchmark
-   cat data/batch_size_results.json
+   ```
+
+4. **Visualize results**:
+   ```bash
+   cd scripts && uv run visualize_batch_size.py
    ```
 
 ## Architecture
 
 ### Crates
 
-- **openzl-sys**: FFI bindings to OpenZL C library (✅ complete)
-- **openzl**: Safe Rust wrapper (Compressor, CCtx, DCtx) (✅ complete)
-- **otel-data**: OTLP data structures and multipart reader/writer (✅ complete)
-- **rebatch**: CLI tool for rebatching testdata (✅ complete)
-- **benchmarks**: Performance benchmarking suite (✅ complete)
+- **openzl-sys**: FFI bindings to OpenZL C library
+- **openzl**: Safe Rust wrapper (Compressor, CCtx, DCtx)
+- **benchmarks**: Performance benchmarking suite
 
-### Key Design Decisions
+### Go
 
-1. **No OTAP Parser**: Removed `otap_registerOtapCompressionGraph()` - not needed
-2. **Direct Library Usage**: Benchmarks use `openzl::CCtx::compress()` instead of external `protobuf_cli` for accurate CPU time measurements
-3. **Parallel Processing**: Benchmarks use rayon for parallel execution across batch sizes and compressors
-4. **Git Submodules**:
-   - `openzl` → danielthank/openzl@evaluation
-   - `otel-arrow` → open-telemetry/otel-arrow@main
-5. **Simplified Dependencies**: otel-data uses `opentelemetry-proto` instead of `otap-df-pdata` to avoid ~675 workspace dependency conflicts
+- **go/cmd/rebatch**: CLI tool for rebatching testdata
 
-## Development
+### Scripts
 
-### Building Individual Crates
-
-```bash
-cargo build -p openzl-sys    # FFI bindings
-cargo build -p openzl        # Safe wrapper
-cargo build -p otel-data     # OTLP data structures
-cargo build -p rebatch       # Rebatch tool
-cargo build -p benchmarks    # Benchmark suite
-
-# Or build everything at once
-cargo build --workspace --release
-```
-
-### Testing
-
-```bash
-cargo test -p openzl-sys
-cargo test -p openzl
-cargo test -p otel-data
-```
+- **scripts/train_compressors.py**: Train OpenZL compressors
+- **scripts/visualize_batch_size.py**: Generate benchmark plots
 
 ## Files
 
 ```
 15712/
 ├── Cargo.toml                      # Workspace root
-├── STATUS.md                       # Detailed implementation status
 ├── README.md                       # This file
 ├── openzl/                         # Submodule (evaluation branch)
 ├── otel-arrow/                     # Submodule (main branch)
 ├── crates/
-│   ├── openzl-sys/                # ✅ FFI bindings
-│   ├── openzl/                    # ✅ Safe wrapper
-│   ├── otel-data/                 # 🔄 OTLP/OTAP data
-│   ├── rebatch/                   # ⏸️ CLI tool
-│   └── benchmarks/                # ⏸️ Benchmarks
+│   ├── openzl-sys/                 # FFI bindings
+│   ├── openzl/                     # Safe wrapper
+│   └── benchmarks/                 # Benchmarks
+├── go/
+│   └── cmd/rebatch/                # Rebatch tool (Go)
 ├── scripts/
-│   └── train_compressors.py       # ✅ Training script
+│   ├── train_compressors.py        # Training script
+│   └── visualize_batch_size.py     # Visualization script
 ├── testdata/
-│   ├── *.zst                      # ✅ Source data
-│   └── generated/                 # Rebatched data (empty)
-└── data/                          # Trained compressors (empty)
-    ├── otap/
+│   └── *.zst                       # Source data
+└── data/
+    ├── generated/                  # Rebatched data
+    ├── otap/                       # Trained compressors
     ├── otlp_metrics/
     └── otlp_traces/
 ```
-
-## Contributing
-
-See [STATUS.md](STATUS.md) for remaining work and implementation details.
 
 ## License
 
