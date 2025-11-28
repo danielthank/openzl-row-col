@@ -1,0 +1,14 @@
+[package]
+name = "openzl-sys"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+
+[build-dependencies]
+bindgen.workspace = true
+cc.workspace = true
+
+[lib]
+name = "openzl_sys"
+path = "src/lib.rs"

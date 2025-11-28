@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/openzl-sys",
+    "crates/openzl",
+    "crates/benchmarks",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.87.0"
+authors = ["OpenTelemetry Contributors"]
+license = "Apache-2.0"
+publish = false
+repository = "https://github.com/danielthank/15712"
+
+[workspace.dependencies]
+openzl-sys = { path = "crates/openzl-sys" }
+openzl = { path = "crates/openzl" }
+# Core dependencies
+thiserror = "2.0"
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json = "1.0"
+zstd = "0.13"
+rayon = "1.11"
+bindgen = "0.72"
+cc = "1.2"
+criterion = { version = "0.7", features = ["html_reports"] }
+
+[workspace.lints.rust]
+# Minimal lints configuration for compatibility with otap-df-pdata
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+# Minimal clippy configuration
+all = { level = "warn", priority = -1 }

@@ -1,0 +1,16 @@
+[package]
+name = "benchmarks"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "benchmark"
+path = "src/main.rs"
+
+[dependencies]
+openzl.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zstd.workspace = true
+rayon.workspace = true
+anyhow.workspace = true

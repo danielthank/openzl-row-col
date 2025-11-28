@@ -1,0 +1,8 @@
+[package]
+name = "openzl"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+openzl-sys.workspace = true
+thiserror.workspace = true

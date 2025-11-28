@@ -1,0 +1,12 @@
+[project]
+name = "batch-size-visualization"
+version = "0.1.0"
+description = "Visualization tools for batch size compression benchmarks"
+requires-python = "==3.11.*"
+dependencies = [
+    "matplotlib>=3.8.0",
+    "numpy>=1.26.0",
+]
+
+[project.scripts]
+visualize-batch-size = "visualize_batch_size:main"

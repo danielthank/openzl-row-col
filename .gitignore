@@ -1,0 +1,92 @@
+# Rust Build Artifacts
+/target/
+**/target/
+**/*.rs.bk
+*.pdb
+**/*.profraw
+
+# Cargo lock files (keep for binaries, ignore for libraries)
+# Since this is a workspace with both, we'll track it
+# Cargo.lock
+
+# Generated directories
+/data/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+*.egg-info/
+.pytest_cache/
+*.pyc
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+
+# OS-specific
+Thumbs.db
+.Trash-*
+Desktop.ini
+
+# Build artifacts from C/C++ (OpenZL submodule builds)
+*.o
+*.lo
+*.a
+*.la
+*.so
+*.so.*
+*.dylib
+*.dll
+
+# CMake (allow in submodules)
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+install_manifest.txt
+Makefile
+*.cmake
+!**/CMakeLists.txt
+
+# Temporary and log files
+*.tmp
+*.log
+*.swp
+
+# Backup files
+*.bak
+*.orig
+*~
+
+# Compressed test data files
+# Allow original .zst files in testdata root
+# but ignore generated ones
+*.zst
+!testdata/*.zst
+
+# Node modules (if any JS tools are added)
+node_modules/
+
+# Compiled documentation
+/target/doc/
+
+# Profiling data
+*.profdata
+perf.data
+perf.data.old
+flamegraph.svg
+
+# Local configuration
+.env
+.env.local
