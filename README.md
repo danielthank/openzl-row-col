@@ -50,13 +50,20 @@ cargo build --release
 
 3. **Run benchmarks**:
    ```bash
-   cargo run --release --bin benchmark
+   cargo run --release --bin benchmark -- --zstd-level 4 --iterations 3
    ```
+   Options:
+   - `--zstd-level <1-22>`: Zstd compression level (default: 4)
+   - `--iterations <N>`: Iterations per dataset (default: 1)
+   - `--data-dir <PATH>`: Data directory (default: data/generated/)
+   - `--compressor-dir <PATH>`: Compressor directory (default: data)
 
 4. **Visualize results**:
    ```bash
-   cd scripts && uv run visualize_batch_size.py
+   cd scripts && uv run visualize_batch_size.py [INPUT] [--output-dir DIR]
    ```
+   - `INPUT`: Path to JSON results (default: ../data/benchmark_results.json)
+   - `--output-dir`: Output directory for plots (default: ../data/plots)
 
 ## Architecture
 
