@@ -16,8 +16,7 @@ use std::fs::File;
 use std::path::PathBuf;
 
 use crate::discovery::{
-    discover_batch_directories, discover_compressors, get_compressor_for_data,
-    parse_batch_dir_name, read_payloads,
+    discover_batch_directories, discover_compressors, parse_batch_dir_name, read_payloads,
 };
 use crate::openzl::OpenZLBenchmark;
 use crate::stats::TimingStats;
@@ -177,15 +176,22 @@ fn main() -> Result<()> {
         .filter_map(|batch_dir| {
             let dir_name = batch_dir.file_name().unwrap().to_str().unwrap();
 
-            // Choose the right compressor for this data format
-            let compressor_name = get_compressor_for_data(dir_name)?;
+            // Parse directory name to get dataset, format, and batch_size
+            let batch_info = parse_batch_dir_name(dir_name).ok()?;
+
+            // Get the compressor name for JSON output (e.g., "otapnodict", "otlp_metrics")
+            let compressor_name = batch_info.compressor_name()?;
+
+            // Get the trained compressor file to load (e.g., all OTAP variants use "otap")
+            let trained_compressor = batch_info.trained_compressor_name()?;
             let compressor_path = compressors
                 .iter()
-                .find(|(name, _)| name == compressor_name)
+                .find(|(name, _)| name == trained_compressor)
                 .map(|(_, path)| path)?;
 
             match run_benchmark(
                 batch_dir,
+                &batch_info,
                 compressor_name,
                 compressor_path,
                 args.zstd_level,
@@ -220,23 +226,27 @@ fn main() -> Result<()> {
     // Write results to JSON
     let suite = BenchmarkSuite { results };
     std::fs::create_dir_all("data")?;
-    let output_file = File::create("data/benchmark_results.json")?;
+    let output_filename = format!(
+        "data/benchmark_results_zstd{}_iter{}.json",
+        args.zstd_level, args.iterations
+    );
+    let output_file = File::create(&output_filename)?;
     serde_json::to_writer_pretty(output_file, &suite)?;
-    println!("Results written to data/benchmark_results.json");
+    println!("Results written to {}", output_filename);
 
     Ok(())
 }
 
 fn run_benchmark(
     batch_dir: &std::path::Path,
+    batch_info: &crate::discovery::BatchDirInfo,
     compressor_name: &str,
     compressor_path: &std::path::Path,
     zstd_level: i32,
     iterations: usize,
 ) -> Result<BenchmarkResult> {
-    // Parse batch info from directory name
-    let dir_name = batch_dir.file_name().unwrap().to_str().unwrap();
-    let (dataset, batch_size) = parse_batch_dir_name(dir_name)?;
+    let dataset = &batch_info.dataset;
+    let batch_size = batch_info.batch_size;
 
     // Load compressor bytes
     let compressor_bytes =
@@ -267,7 +277,7 @@ fn run_benchmark(
         total_uncompressed_bytes as f64 / openzl_result.total_compressed_bytes as f64;
 
     Ok(BenchmarkResult {
-        dataset,
+        dataset: dataset.clone(),
         batch_size,
         compressor: compressor_name.to_string(),
         num_payloads,

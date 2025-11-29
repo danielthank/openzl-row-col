@@ -57,8 +57,8 @@ def extract_compression_ratio_series(
     filtered = [r for r in dataset_results if r["compressor"] == compressor]
     filtered.sort(key=lambda x: x["batch_size"])
 
-    # For OTAP, we need to use OTLP uncompressed bytes as the baseline
-    if compressor == "otap":
+    # For OTAP variants, we need to use OTLP uncompressed bytes as the baseline
+    if compressor in ("otap", "otapnodict", "otapdictperfile"):
         # Build lookup of OTLP uncompressed bytes by batch_size
         otlp_baseline = {}
         for r in dataset_results:
@@ -136,13 +136,15 @@ def extract_throughput_series(
 
 def get_series_configs():
     """
-    Return series configurations for plotting.
+    Return series configurations for plotting time/throughput.
 
     Each config: (compressor, method, label, color, marker, linestyle)
+    Note: OTAP variants (nodict, dictperfile) only show zstd, not OpenZL.
     """
     return [
-        ("otap", "openzl", "OTAP + OpenZL", "red", "D", "-"),
         ("otap", "zstd", "OTAP + zstd", "blue", "^", "-"),
+        ("otapnodict", "zstd", "OTAP nodict + zstd", "purple", "^", "-"),
+        ("otapdictperfile", "zstd", "OTAP dictperfile + zstd", "cyan", "^", "-"),
         ("otlp_metrics", "openzl", "OTLP + OpenZL", "red", "s", ":"),
         ("otlp_metrics", "zstd", "OTLP + zstd", "blue", "o", ":"),
         ("otlp_traces", "openzl", "OTLP + OpenZL", "red", "s", ":"),
@@ -156,11 +158,15 @@ def get_compression_ratio_series_configs():
 
     Each config: (compressor, method, label, color, marker, linestyle)
     method can be 'zstd', 'openzl', or 'raw' (uncompressed)
+    Note: OTAP variants (nodict, dictperfile) only show zstd and raw, not OpenZL.
     """
     return [
-        ("otap", "openzl", "OTAP + OpenZL", "red", "D", "-"),
         ("otap", "zstd", "OTAP + zstd", "blue", "^", "-"),
         ("otap", "raw", "OTAP raw", "gray", "x", "-"),
+        ("otapnodict", "zstd", "OTAP nodict + zstd", "purple", "^", "-"),
+        ("otapnodict", "raw", "OTAP nodict raw", "darkgray", "x", "-"),
+        ("otapdictperfile", "zstd", "OTAP dictperfile + zstd", "cyan", "^", "-"),
+        ("otapdictperfile", "raw", "OTAP dictperfile raw", "lightgray", "x", "-"),
         ("otlp_metrics", "openzl", "OTLP + OpenZL", "red", "s", ":"),
         ("otlp_metrics", "zstd", "OTLP + zstd", "blue", "o", ":"),
         ("otlp_traces", "openzl", "OTLP + OpenZL", "red", "s", ":"),
@@ -315,8 +321,8 @@ def main():
     )
     parser.add_argument(
         "--output-dir",
-        default="../data/plots",
-        help="Output directory for plots (default: ../data/plots)",
+        default=None,
+        help="Output directory for plots (default: {input}-plots)",
     )
 
     args = parser.parse_args()
@@ -324,7 +330,12 @@ def main():
     # Resolve paths relative to script location
     script_dir = Path(__file__).parent
     input_path = (script_dir / args.input).resolve()
-    output_dir = (script_dir / args.output_dir).resolve()
+
+    # Default output dir is {input_path}-plots (without .json extension)
+    if args.output_dir is None:
+        output_dir = input_path.with_suffix("").with_name(input_path.stem + "-plots")
+    else:
+        output_dir = (script_dir / args.output_dir).resolve()
 
     if not input_path.exists():
         print(f"Error: Input file not found: {input_path}")

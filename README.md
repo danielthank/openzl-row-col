@@ -40,8 +40,17 @@ cargo build --release
 
 1. **Rebatch testdata**:
    ```bash
-   cd go && go run ./cmd/rebatch
+   cd go && go run ./cmd/rebatch \
+       --input ../testdata/astronomy-otelmetrics.zst \
+       --mode metrics \
+       --batch-size 10,100,1000 \
+       --format otlp,otap,otapnodict,otapdictperfile
    ```
+   Options:
+   - `--input <FILE>`: Input .zst file
+   - `--mode <metrics|traces>`: Data type
+   - `--batch-size <SIZES>`: Comma-separated batch sizes
+   - `--format <FORMATS>`: otlp, otap, otapnodict, otapdictperfile
 
 2. **Train compressors**:
    ```bash
@@ -54,16 +63,18 @@ cargo build --release
    ```
    Options:
    - `--zstd-level <1-22>`: Zstd compression level (default: 4)
-   - `--iterations <N>`: Iterations per dataset (default: 1)
+   - `--iterations <N>`: Iterations per dataset (default: 3)
    - `--data-dir <PATH>`: Data directory (default: data/generated/)
    - `--compressor-dir <PATH>`: Compressor directory (default: data)
+
+   Output: `data/benchmark_results_zstd{level}_iter{N}.json`
 
 4. **Visualize results**:
    ```bash
    cd scripts && uv run visualize_batch_size.py [INPUT] [--output-dir DIR]
    ```
    - `INPUT`: Path to JSON results (default: ../data/benchmark_results.json)
-   - `--output-dir`: Output directory for plots (default: ../data/plots)
+   - `--output-dir`: Output directory for plots (default: {INPUT}-plots)
 
 ## Architecture
 

@@ -49,33 +49,50 @@ pub fn discover_compressors(data_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
     Ok(compressors)
 }
 
-/// Get the appropriate compressor name for a data directory
-pub fn get_compressor_for_data(dir_name: &str) -> Option<&'static str> {
-    // Automatically choose the right compressor based on data format
-    // Directory format: {dataset}-{signal}-{format}-{batchsize}
-    // Examples: astronomy-otelmetrics-otap-100, astronomy-oteltraces-otlp-50
+/// Parsed batch directory info
+#[derive(Debug, Clone)]
+pub struct BatchDirInfo {
+    /// Dataset name, e.g., "astronomy-otelmetrics"
+    pub dataset: String,
+    /// Format name, e.g., "otap", "otapnodict", "otlp"
+    pub format: String,
+    /// Batch size, e.g., 1000
+    pub batch_size: usize,
+}
 
-    if dir_name.contains("-otap-") {
-        // OTAP format data -> use OTAP compressor
-        Some("otap")
-    } else if dir_name.contains("otelmetrics") && dir_name.contains("-otlp-") {
-        // OTLP metrics data -> use OTLP metrics compressor
-        Some("otlp_metrics")
-    } else if dir_name.contains("oteltraces") && dir_name.contains("-otlp-") {
-        // OTLP traces data -> use OTLP traces compressor
-        Some("otlp_traces")
-    } else {
-        // Unknown format, skip
-        None
+impl BatchDirInfo {
+    /// Get the compressor name to use for this batch
+    /// Returns the format for OTAP variants, or otlp_metrics/otlp_traces for OTLP
+    pub fn compressor_name(&self) -> Option<&str> {
+        match self.format.as_str() {
+            "otap" | "otapnodict" | "otapdictperfile" => Some(&self.format),
+            "otlp" if self.dataset.contains("otelmetrics") => Some("otlp_metrics"),
+            "otlp" if self.dataset.contains("oteltraces") => Some("otlp_traces"),
+            _ => None,
+        }
+    }
+
+    /// Get the trained compressor file to load
+    /// All OTAP variants use the same trained "otap" compressor
+    pub fn trained_compressor_name(&self) -> Option<&'static str> {
+        match self.format.as_str() {
+            "otap" | "otapnodict" | "otapdictperfile" => Some("otap"),
+            "otlp" if self.dataset.contains("otelmetrics") => Some("otlp_metrics"),
+            "otlp" if self.dataset.contains("oteltraces") => Some("otlp_traces"),
+            _ => None,
+        }
     }
 }
 
-/// Parse batch directory name into dataset and batch size
-pub fn parse_batch_dir_name(dir_name: &str) -> Result<(String, usize)> {
-    // Format: astronomy-otelmetrics-otlp-100
-    // Parse as: dataset=astronomy-otelmetrics, batch_size=100
-    let parts: Vec<&str> = dir_name.rsplitn(2, '-').collect();
-    if parts.len() != 2 {
+/// Parse batch directory name into components
+/// Format: {dataset}-{signal}-{format}-{batchsize}
+/// Example: astronomy-otelmetrics-otapdictperfile-1000
+pub fn parse_batch_dir_name(dir_name: &str) -> Result<BatchDirInfo> {
+    // Split from the right: last part is batch_size, second-to-last is format
+    let parts: Vec<&str> = dir_name.rsplitn(3, '-').collect();
+    // parts[0] = batch_size, parts[1] = format, parts[2] = rest (dataset-signal)
+
+    if parts.len() < 3 {
         anyhow::bail!("Invalid directory name format: {}", dir_name);
     }
 
@@ -83,17 +100,11 @@ pub fn parse_batch_dir_name(dir_name: &str) -> Result<(String, usize)> {
         .parse::<usize>()
         .context("Failed to parse batch size")?;
 
-    // Remove the format suffix (otlp or otap) from dataset
-    let dataset_with_format = parts[1];
-    let dataset = if dataset_with_format.ends_with("-otlp") {
-        &dataset_with_format[..dataset_with_format.len() - 5]
-    } else if dataset_with_format.ends_with("-otap") {
-        &dataset_with_format[..dataset_with_format.len() - 5]
-    } else {
-        dataset_with_format
-    };
-
-    Ok((dataset.to_string(), batch_size))
+    Ok(BatchDirInfo {
+        dataset: parts[2].to_string(),
+        format: parts[1].to_string(),
+        batch_size,
+    })
 }
 
 /// Read all payload files from a batch directory

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"flag"
 	"fmt"
@@ -9,7 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/klauspost/compress/zstd"
+	arrowpb "github.com/open-telemetry/otel-arrow/go/api/experimental/arrow/v1"
 	"github.com/open-telemetry/otel-arrow/go/pkg/config"
 	"github.com/open-telemetry/otel-arrow/go/pkg/otel/arrow_record"
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -18,15 +21,35 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type OTAPMode int
+
+const (
+	OTAPModeNative      OTAPMode = iota // Reuse producer (incremental dict)
+	OTAPModeNoDict                      // config.WithNoDictionary()
+	OTAPModeDictPerFile                 // New producer per batch
+)
+
 func main() {
 	inputFile := flag.String("input", "", "Input .zst file")
-	mode := flag.String("mode", "", "Mode: 'metrics' or 'traces'")
+	mode := flag.String("mode", "", "Mode: 'metrics', 'traces', or 'dump'")
 	batchSizeStr := flag.String("batch-size", "", "Comma-separated list of batch sizes")
 	formatStr := flag.String("format", "", "Comma-separated list of formats: 'otlp' and/or 'otap'")
+	dumpFile := flag.String("dump-file", "", "File to dump (for dump mode)")
 	flag.Parse()
+
+	// Handle dump mode
+	if *mode == "dump" {
+		if *dumpFile == "" {
+			fmt.Fprintf(os.Stderr, "Usage: %s --mode dump --dump-file <file.bin>\n", os.Args[0])
+			os.Exit(1)
+		}
+		dumpOTAPFile(*dumpFile)
+		return
+	}
 
 	if *inputFile == "" || *mode == "" || *batchSizeStr == "" || *formatStr == "" {
 		fmt.Fprintf(os.Stderr, "Usage: %s --input <file.zst> --mode <metrics|traces> --batch-size <sizes> --format <formats>\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "       %s --mode dump --dump-file <file.bin>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Example: %s --input testdata/astronomy-oteltraces.zst --mode traces --batch-size 10,100,1000 --format otlp,otap\n", os.Args[0])
 		os.Exit(1)
 	}
@@ -49,11 +72,17 @@ func main() {
 	}
 
 	// Parse formats
+	validFormats := map[string]bool{
+		"otlp":            true,
+		"otap":            true,
+		"otapnodict":      true,
+		"otapdictperfile": true,
+	}
 	formats := []string{}
 	for _, format := range strings.Split(*formatStr, ",") {
 		format = strings.TrimSpace(format)
-		if format != "otlp" && format != "otap" {
-			fmt.Fprintf(os.Stderr, "Error: invalid format '%s', must be 'otlp' or 'otap'\n", format)
+		if !validFormats[format] {
+			fmt.Fprintf(os.Stderr, "Error: invalid format '%s', must be one of: otlp, otap, otapnodict, otapdictperfile\n", format)
 			os.Exit(1)
 		}
 		formats = append(formats, format)
@@ -147,10 +176,15 @@ func processMetrics(inputFile string, batchSizes []int, formats []string) {
 			batches := rebatchMetrics(allMetrics, batchSize)
 
 			// Write batches
-			if format == "otlp" {
-				writeBatchesOTLP(batches, outputDir, totalDataPoints)
-			} else {
-				writeBatchesOTAP(batches, outputDir, totalDataPoints, true)
+			switch format {
+			case "otlp":
+				writeBatchesOTLPMetrics(batches, outputDir)
+			case "otap":
+				writeBatchesOTAPMetrics(batches, outputDir, OTAPModeNative)
+			case "otapnodict":
+				writeBatchesOTAPMetrics(batches, outputDir, OTAPModeNoDict)
+			case "otapdictperfile":
+				writeBatchesOTAPMetrics(batches, outputDir, OTAPModeDictPerFile)
 			}
 		}
 	}
@@ -236,10 +270,15 @@ func processTraces(inputFile string, batchSizes []int, formats []string) {
 			batches := rebatchTraces(allTraces, batchSize)
 
 			// Write batches
-			if format == "otlp" {
-				writeBatchesOTLPTraces(batches, outputDir, totalSpans)
-			} else {
-				writeBatchesOTAPTraces(batches, outputDir, totalSpans)
+			switch format {
+			case "otlp":
+				writeBatchesOTLPTraces(batches, outputDir)
+			case "otap":
+				writeBatchesOTAPTraces(batches, outputDir, OTAPModeNative)
+			case "otapnodict":
+				writeBatchesOTAPTraces(batches, outputDir, OTAPModeNoDict)
+			case "otapdictperfile":
+				writeBatchesOTAPTraces(batches, outputDir, OTAPModeDictPerFile)
 			}
 		}
 	}
@@ -369,7 +408,7 @@ func getMetricDataPointCount(m pmetric.Metric) int {
 	}
 }
 
-func writeBatchesOTLP(batches []pmetric.Metrics, outputDir string, totalPoints int) {
+func writeBatchesOTLPMetrics(batches []pmetric.Metrics, outputDir string) {
 	marshaler := pmetric.ProtoMarshaler{}
 
 	for i, batch := range batches {
@@ -389,10 +428,24 @@ func writeBatchesOTLP(batches []pmetric.Metrics, outputDir string, totalPoints i
 	fmt.Printf("  Wrote %d batches to %s\n", len(batches), outputDir)
 }
 
-func writeBatchesOTAP(batches []pmetric.Metrics, outputDir string, totalPoints int, isMetrics bool) {
-	producer := arrow_record.NewProducerWithOptions(config.WithNoZstd())
+func writeBatchesOTAPMetrics(batches []pmetric.Metrics, outputDir string, mode OTAPMode) {
+	var producer *arrow_record.Producer
+
+	// For native mode, create one producer and reuse (incremental dictionaries)
+	if mode == OTAPModeNative {
+		producer = arrow_record.NewProducerWithOptions(config.WithNoZstd())
+	}
 
 	for i, batch := range batches {
+		// For dictperfile, create fresh producer each iteration (dictionary but no deltas)
+		if mode == OTAPModeDictPerFile {
+			producer = arrow_record.NewProducerWithOptions(config.WithNoZstd())
+		}
+		// For nodict, create fresh producer with no dictionary
+		if mode == OTAPModeNoDict {
+			producer = arrow_record.NewProducerWithOptions(config.WithNoZstd(), config.WithNoDictionary())
+		}
+
 		arrowRecords, err := producer.BatchArrowRecordsFromMetrics(batch)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error converting batch %d to Arrow: %v\n", i, err)
@@ -416,7 +469,7 @@ func writeBatchesOTAP(batches []pmetric.Metrics, outputDir string, totalPoints i
 	fmt.Printf("  Wrote %d batches to %s\n", len(batches), outputDir)
 }
 
-func writeBatchesOTLPTraces(batches []ptrace.Traces, outputDir string, totalSpans int) {
+func writeBatchesOTLPTraces(batches []ptrace.Traces, outputDir string) {
 	marshaler := ptrace.ProtoMarshaler{}
 
 	for i, batch := range batches {
@@ -436,10 +489,24 @@ func writeBatchesOTLPTraces(batches []ptrace.Traces, outputDir string, totalSpan
 	fmt.Printf("  Wrote %d batches to %s\n", len(batches), outputDir)
 }
 
-func writeBatchesOTAPTraces(batches []ptrace.Traces, outputDir string, totalSpans int) {
-	producer := arrow_record.NewProducerWithOptions(config.WithNoZstd())
+func writeBatchesOTAPTraces(batches []ptrace.Traces, outputDir string, mode OTAPMode) {
+	var producer *arrow_record.Producer
+
+	// For native mode, create one producer and reuse (incremental dictionaries)
+	if mode == OTAPModeNative {
+		producer = arrow_record.NewProducerWithOptions(config.WithNoZstd())
+	}
 
 	for i, batch := range batches {
+		// For dictperfile, create fresh producer each iteration (dictionary but no deltas)
+		if mode == OTAPModeDictPerFile {
+			producer = arrow_record.NewProducerWithOptions(config.WithNoZstd())
+		}
+		// For nodict, create fresh producer with no dictionary
+		if mode == OTAPModeNoDict {
+			producer = arrow_record.NewProducerWithOptions(config.WithNoZstd(), config.WithNoDictionary())
+		}
+
 		arrowRecords, err := producer.BatchArrowRecordsFromTraces(batch)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error converting batch %d to Arrow: %v\n", i, err)
@@ -461,4 +528,67 @@ func writeBatchesOTAPTraces(batches []ptrace.Traces, outputDir string, totalSpan
 	}
 
 	fmt.Printf("  Wrote %d batches to %s\n", len(batches), outputDir)
+}
+
+func dumpOTAPFile(filePath string) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
+		os.Exit(1)
+	}
+
+	var batch arrowpb.BatchArrowRecords
+	if err := proto.Unmarshal(data, &batch); err != nil {
+		fmt.Fprintf(os.Stderr, "Error unmarshaling BatchArrowRecords: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("BatchArrowRecords:\n")
+	fmt.Printf("  batch_id: %d\n", batch.BatchId)
+	fmt.Printf("  headers: %d bytes\n", len(batch.Headers))
+	fmt.Printf("  arrow_payloads: %d\n", len(batch.ArrowPayloads))
+
+	for i, payload := range batch.ArrowPayloads {
+		fmt.Printf("\n  [%d] ArrowPayload:\n", i)
+		fmt.Printf("       schema_id: %s\n", payload.SchemaId)
+		fmt.Printf("       type: %s (%d)\n", payload.Type.String(), payload.Type)
+		fmt.Printf("       record: %d bytes\n", len(payload.Record))
+
+		// Decode Arrow IPC stream with dictionary deltas support
+		reader, err := ipc.NewReader(
+			bytes.NewReader(payload.Record),
+			ipc.WithDictionaryDeltas(true),
+		)
+		if err != nil {
+			fmt.Printf("       [error reading Arrow IPC: %v]\n", err)
+			continue
+		}
+
+		schema := reader.Schema()
+		fmt.Printf("       schema: %d fields\n", schema.NumFields())
+		for j := 0; j < schema.NumFields(); j++ {
+			field := schema.Field(j)
+			fmt.Printf("         - %s: %s\n", field.Name, field.Type)
+		}
+
+		// Read records
+		recordNum := 0
+		for reader.Next() {
+			rec := reader.Record()
+			fmt.Printf("       record[%d]: %d rows, %d cols\n", recordNum, rec.NumRows(), rec.NumCols())
+
+			// Print first few values of each column
+			for c := 0; c < int(rec.NumCols()); c++ {
+				col := rec.Column(c)
+				colName := schema.Field(c).Name
+				fmt.Printf("         %s: %s\n", colName, col)
+			}
+			recordNum++
+		}
+
+		if err := reader.Err(); err != nil {
+			fmt.Printf("       [error iterating records: %v]\n", err)
+		}
+		reader.Release()
+	}
 }
