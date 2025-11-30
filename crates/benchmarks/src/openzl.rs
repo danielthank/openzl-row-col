@@ -1,7 +1,9 @@
 //! OpenZL proto-aware compression/decompression benchmarks
 
 use anyhow::{Context, Result};
-use openzl::proto::{compare_otap, compare_otlp_metrics, compare_otlp_traces};
+use openzl::proto::{
+    compare_otap, compare_otlp_metrics, compare_otlp_traces, compare_tpch_proto,
+};
 use openzl::{ProtoDeserializer, ProtoSerializer};
 use std::time::Instant;
 
@@ -11,15 +13,19 @@ enum ProtoType {
     OtlpMetrics,
     OtlpTraces,
     Otap,
+    TpchProto,
 }
 
 impl ProtoType {
     /// Determine proto type from compressor name
     fn from_compressor_name(name: &str) -> Option<Self> {
         match name {
+            // OTel formats
             "otlp_metrics" => Some(Self::OtlpMetrics),
             "otlp_traces" => Some(Self::OtlpTraces),
             "otap" | "otapnodict" | "otapdictperfile" => Some(Self::Otap),
+            // TPC-H proto format (Arrow doesn't use proto-aware compression)
+            "tpch_proto" => Some(Self::TpchProto),
             _ => None,
         }
     }
@@ -108,6 +114,7 @@ impl OpenZLBenchmark {
                 ProtoType::OtlpMetrics => compare_otlp_metrics(orig, decomp),
                 ProtoType::OtlpTraces => compare_otlp_traces(orig, decomp),
                 ProtoType::Otap => compare_otap(orig, decomp),
+                ProtoType::TpchProto => compare_tpch_proto(orig, decomp),
             };
 
             if !equal {
@@ -134,6 +141,7 @@ impl OpenZLBenchmark {
                 ProtoType::OtlpMetrics => self.serializer.compress_otlp_metrics(payload),
                 ProtoType::OtlpTraces => self.serializer.compress_otlp_traces(payload),
                 ProtoType::Otap => self.serializer.compress_otap(payload),
+                ProtoType::TpchProto => self.serializer.compress_tpch_proto(payload),
             }
             .with_context(|| {
                 format!(
@@ -160,6 +168,7 @@ impl OpenZLBenchmark {
                 ProtoType::OtlpMetrics => self.deserializer.decompress_otlp_metrics(payload),
                 ProtoType::OtlpTraces => self.deserializer.decompress_otlp_traces(payload),
                 ProtoType::Otap => self.deserializer.decompress_otap(payload),
+                ProtoType::TpchProto => self.deserializer.decompress_tpch_proto(payload),
             }?;
             total_time += start.elapsed().as_secs_f64() * 1000.0;
             decompressed.push(result);

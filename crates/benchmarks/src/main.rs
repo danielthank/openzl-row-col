@@ -28,7 +28,7 @@ use crate::zstd::ZstdBenchmark;
 #[command(about = "Benchmark OpenZL compression on OpenTelemetry data")]
 struct Args {
     /// Zstd compression level (1-22)
-    #[arg(long, default_value = "4")]
+    #[arg(long, default_value = "7")]
     zstd_level: i32,
 
     /// Number of iterations to run entire dataset
@@ -42,6 +42,26 @@ struct Args {
     /// Compressor directory containing trained.zlc files
     #[arg(long, default_value = "data")]
     compressor_dir: PathBuf,
+
+    /// Filter datasets to benchmark: 'all', 'otel', 'tpch'
+    #[arg(long, default_value = "all")]
+    dataset: String,
+}
+
+/// Check if a dataset should be included based on the filter
+fn should_include_dataset(dataset_name: &str, filter: &str) -> bool {
+    match filter {
+        "all" => true,
+        "otel" => dataset_name.contains("otel"),
+        "tpch" => dataset_name.starts_with("tpch-"),
+        _ => {
+            eprintln!(
+                "Unknown dataset filter: {}. Valid options: all, otel, tpch",
+                filter
+            );
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Compression result with timing statistics
@@ -64,7 +84,8 @@ struct BenchmarkResult {
     total_uncompressed_bytes: usize,
     zstd_level: i32,
     zstd: CompressionResult,
-    openzl: CompressionResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    openzl: Option<CompressionResult>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -126,19 +147,21 @@ fn print_comparison_table(results: &[BenchmarkResult]) {
                 result.zstd.compression.throughput_std_mbps,
             );
 
-            // OpenZL row
-            println!(
-                "{:<12} {:>12} {:>8.2}x {:>9.2}±{:<5.2} {:>9.2}±{:<5.2} {:>8.1} MB/s ±{:.1}",
-                format!("{} openzl", format_name),
-                result.total_uncompressed_bytes,
-                result.openzl.compression_ratio,
-                result.openzl.compression.avg_ms,
-                result.openzl.compression.std_ms,
-                result.openzl.decompression.avg_ms,
-                result.openzl.decompression.std_ms,
-                result.openzl.compression.throughput_mbps,
-                result.openzl.compression.throughput_std_mbps,
-            );
+            // OpenZL row (only if available)
+            if let Some(ref openzl) = result.openzl {
+                println!(
+                    "{:<12} {:>12} {:>8.2}x {:>9.2}±{:<5.2} {:>9.2}±{:<5.2} {:>8.1} MB/s ±{:.1}",
+                    format!("{} openzl", format_name),
+                    result.total_uncompressed_bytes,
+                    openzl.compression_ratio,
+                    openzl.compression.avg_ms,
+                    openzl.compression.std_ms,
+                    openzl.decompression.avg_ms,
+                    openzl.decompression.std_ms,
+                    openzl.compression.throughput_mbps,
+                    openzl.compression.throughput_std_mbps,
+                );
+            }
         }
     }
 
@@ -152,6 +175,7 @@ fn main() -> Result<()> {
     println!("======================");
     println!("Zstd level: {}", args.zstd_level);
     println!("Iterations: {}", args.iterations);
+    println!("Dataset filter: {}", args.dataset);
     println!();
 
     if !args.data_dir.exists() {
@@ -171,15 +195,52 @@ fn main() -> Result<()> {
     println!();
 
     // Run benchmarks
+    let dataset_filter = &args.dataset;
     let results: Vec<BenchmarkResult> = batch_dirs
         .par_iter()
+        .filter(|batch_dir| {
+            let dir_name = batch_dir.file_name().unwrap().to_str().unwrap();
+            if let Ok(batch_info) = parse_batch_dir_name(dir_name) {
+                should_include_dataset(&batch_info.dataset, dataset_filter)
+            } else {
+                false
+            }
+        })
         .filter_map(|batch_dir| {
             let dir_name = batch_dir.file_name().unwrap().to_str().unwrap();
 
             // Parse directory name to get dataset, format, and batch_size
             let batch_info = parse_batch_dir_name(dir_name).ok()?;
 
-            // Get the compressor name for JSON output (e.g., "otapnodict", "otlp_metrics")
+            // Check if this is an Arrow format (zstd-only, no OpenZL)
+            if let Some(arrow_format) = batch_info.arrow_format_name() {
+                match run_zstd_only_benchmark(
+                    batch_dir,
+                    &batch_info,
+                    arrow_format,
+                    args.zstd_level,
+                    args.iterations,
+                ) {
+                    Ok(result) => {
+                        println!(
+                            "[{}] {} @ batch_size={} (zstd-only)",
+                            result.dataset, result.compressor, result.batch_size,
+                        );
+                        return Some(result);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: Benchmark failed for {} with {}: {}",
+                            batch_dir.display(),
+                            arrow_format,
+                            e
+                        );
+                        return None;
+                    }
+                }
+            }
+
+            // Proto formats: run both zstd and OpenZL
             let compressor_name = batch_info.compressor_name()?;
 
             // Get the trained compressor file to load (e.g., all OTAP variants use "otap")
@@ -227,8 +288,8 @@ fn main() -> Result<()> {
     let suite = BenchmarkSuite { results };
     std::fs::create_dir_all("data")?;
     let output_filename = format!(
-        "data/benchmark_results_zstd{}_iter{}.json",
-        args.zstd_level, args.iterations
+        "data/benchmark_{}_zstd{}_iter{}.json",
+        args.dataset, args.zstd_level, args.iterations
     );
     let output_file = File::create(&output_filename)?;
     serde_json::to_writer_pretty(output_file, &suite)?;
@@ -237,6 +298,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Run benchmark with both zstd and OpenZL
 fn run_benchmark(
     batch_dir: &std::path::Path,
     batch_info: &crate::discovery::BatchDirInfo,
@@ -296,7 +358,7 @@ fn run_benchmark(
                 total_uncompressed_bytes,
             ),
         },
-        openzl: CompressionResult {
+        openzl: Some(CompressionResult {
             total_bytes: openzl_result.total_compressed_bytes,
             compression_ratio: openzl_compression_ratio,
             compression: TimingStats::from_times(
@@ -307,6 +369,58 @@ fn run_benchmark(
                 &openzl_result.decompression_times,
                 total_uncompressed_bytes,
             ),
+        }),
+    })
+}
+
+/// Run benchmark with zstd only (for Arrow formats without OpenZL support)
+fn run_zstd_only_benchmark(
+    batch_dir: &std::path::Path,
+    batch_info: &crate::discovery::BatchDirInfo,
+    compressor_name: &str,
+    zstd_level: i32,
+    iterations: usize,
+) -> Result<BenchmarkResult> {
+    let dataset = &batch_info.dataset;
+    let batch_size = batch_info.batch_size;
+
+    // Read all payloads
+    let payloads = read_payloads(batch_dir)?;
+    let num_payloads = payloads.len();
+
+    if num_payloads == 0 {
+        anyhow::bail!("No payloads found in {}", batch_dir.display());
+    }
+
+    let total_uncompressed_bytes: usize = payloads.iter().map(|p| p.len()).sum();
+
+    // Run Zstd benchmark only
+    let zstd_benchmark = ZstdBenchmark::new(zstd_level);
+    let zstd_result = zstd_benchmark.run(&payloads, iterations)?;
+
+    let zstd_compression_ratio =
+        total_uncompressed_bytes as f64 / zstd_result.total_compressed_bytes as f64;
+
+    Ok(BenchmarkResult {
+        dataset: dataset.clone(),
+        batch_size,
+        compressor: compressor_name.to_string(),
+        num_payloads,
+        iterations,
+        total_uncompressed_bytes,
+        zstd_level,
+        zstd: CompressionResult {
+            total_bytes: zstd_result.total_compressed_bytes,
+            compression_ratio: zstd_compression_ratio,
+            compression: TimingStats::from_times(
+                &zstd_result.compression_times,
+                total_uncompressed_bytes,
+            ),
+            decompression: TimingStats::from_times(
+                &zstd_result.decompression_times,
+                total_uncompressed_bytes,
+            ),
         },
+        openzl: None,
     })
 }

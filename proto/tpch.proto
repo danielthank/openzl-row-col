@@ -1,0 +1,57 @@
+syntax = "proto3";
+package tpch;
+
+option go_package = "github.com/danielthank/15712/go/pkg/tpch";
+
+// LineItem represents a row from the LINEITEM table
+// This is the largest TPC-H table (~6M rows at SF=1)
+message LineItem {
+  int64 l_orderkey = 1;
+  int64 l_partkey = 2;
+  int64 l_suppkey = 3;
+  int32 l_linenumber = 4;
+  double l_quantity = 5;
+  double l_extendedprice = 6;
+  double l_discount = 7;
+  double l_tax = 8;
+  string l_returnflag = 9;
+  string l_linestatus = 10;
+  string l_shipdate = 11;
+  string l_commitdate = 12;
+  string l_receiptdate = 13;
+  string l_shipinstruct = 14;
+  string l_shipmode = 15;
+  string l_comment = 16;
+}
+
+// Orders represents a row from the ORDERS table
+// Second largest TPC-H table (~1.5M rows at SF=1)
+message Orders {
+  int64 o_orderkey = 1;
+  int64 o_custkey = 2;
+  string o_orderstatus = 3;
+  double o_totalprice = 4;
+  string o_orderdate = 5;
+  string o_orderpriority = 6;
+  string o_clerk = 7;
+  int32 o_shippriority = 8;
+  string o_comment = 9;
+}
+
+// LineItemBatch is a batch of LineItem rows
+message LineItemBatch {
+  repeated LineItem items = 1;
+}
+
+// OrdersBatch is a batch of Orders rows
+message OrdersBatch {
+  repeated Orders orders = 1;
+}
+
+// TpchBatch is a generic wrapper for any TPC-H table batch
+message TpchBatch {
+  oneof batch {
+    LineItemBatch lineitem = 1;
+    OrdersBatch orders = 2;
+  }
+}

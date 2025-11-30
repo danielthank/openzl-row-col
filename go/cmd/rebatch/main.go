@@ -434,6 +434,7 @@ func writeBatchesOTAPMetrics(batches []pmetric.Metrics, outputDir string, mode O
 	// For native mode, create one producer and reuse (incremental dictionaries)
 	if mode == OTAPModeNative {
 		producer = arrow_record.NewProducerWithOptions(config.WithNoZstd())
+		defer producer.Close()
 	}
 
 	for i, batch := range batches {
@@ -450,13 +451,24 @@ func writeBatchesOTAPMetrics(batches []pmetric.Metrics, outputDir string, mode O
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error converting batch %d to Arrow: %v\n", i, err)
 			fmt.Fprintf(os.Stderr, "  (This may be due to high cardinality - try using OTLP format instead)\n")
+			if mode != OTAPModeNative {
+				producer.Close()
+			}
 			return
 		}
 
 		data, err := proto.Marshal(arrowRecords)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error marshaling Arrow batch %d: %v\n", i, err)
+			if mode != OTAPModeNative {
+				producer.Close()
+			}
 			continue
+		}
+
+		// Close per-batch producer
+		if mode != OTAPModeNative {
+			producer.Close()
 		}
 
 		outputFile := filepath.Join(outputDir, fmt.Sprintf("payload_%04d.bin", i))
@@ -495,6 +507,7 @@ func writeBatchesOTAPTraces(batches []ptrace.Traces, outputDir string, mode OTAP
 	// For native mode, create one producer and reuse (incremental dictionaries)
 	if mode == OTAPModeNative {
 		producer = arrow_record.NewProducerWithOptions(config.WithNoZstd())
+		defer producer.Close()
 	}
 
 	for i, batch := range batches {
@@ -511,13 +524,24 @@ func writeBatchesOTAPTraces(batches []ptrace.Traces, outputDir string, mode OTAP
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error converting batch %d to Arrow: %v\n", i, err)
 			fmt.Fprintf(os.Stderr, "  (This may be due to high cardinality - try using OTLP format instead)\n")
+			if mode != OTAPModeNative {
+				producer.Close()
+			}
 			return
 		}
 
 		data, err := proto.Marshal(arrowRecords)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error marshaling Arrow batch %d: %v\n", i, err)
+			if mode != OTAPModeNative {
+				producer.Close()
+			}
 			continue
+		}
+
+		// Close per-batch producer
+		if mode != OTAPModeNative {
+			producer.Close()
 		}
 
 		outputFile := filepath.Join(outputDir, fmt.Sprintf("payload_%04d.bin", i))

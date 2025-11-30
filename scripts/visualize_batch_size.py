@@ -78,6 +78,26 @@ def extract_compression_ratio_series(
                     compressed_bytes = r[method]["total_bytes"]
                     ratios.append(otlp_baseline[batch_size] / compressed_bytes)
         return batch_sizes, ratios
+    # For Arrow variants, use tpch_proto uncompressed bytes as the baseline
+    elif compressor in ("arrow", "arrownodict", "arrowdictperfile"):
+        proto_baseline = {}
+        for r in dataset_results:
+            if r["compressor"] == "tpch_proto":
+                proto_baseline[r["batch_size"]] = r["total_uncompressed_bytes"]
+
+        batch_sizes = []
+        ratios = []
+        for r in filtered:
+            batch_size = r["batch_size"]
+            if batch_size in proto_baseline:
+                batch_sizes.append(batch_size)
+                if method == "raw":
+                    # Arrow raw = proto_raw / arrow_uncompressed
+                    ratios.append(proto_baseline[batch_size] / r["total_uncompressed_bytes"])
+                else:
+                    compressed_bytes = r[method]["total_bytes"]
+                    ratios.append(proto_baseline[batch_size] / compressed_bytes)
+        return batch_sizes, ratios
     else:
         batch_sizes = [r["batch_size"] for r in filtered]
         ratios = [r[method]["compression_ratio"] for r in filtered]
@@ -140,8 +160,10 @@ def get_series_configs():
 
     Each config: (compressor, method, label, color, marker, linestyle)
     Note: OTAP variants (nodict, dictperfile) only show zstd, not OpenZL.
+    Note: TPC-H Arrow variants only show zstd, not OpenZL.
     """
     return [
+        # OTel formats
         ("otap", "zstd", "OTAP + zstd", "blue", "^", "-"),
         ("otapnodict", "zstd", "OTAP nodict + zstd", "purple", "^", "-"),
         ("otapdictperfile", "zstd", "OTAP dictperfile + zstd", "cyan", "^", "-"),
@@ -149,6 +171,12 @@ def get_series_configs():
         ("otlp_metrics", "zstd", "OTLP + zstd", "blue", "o", ":"),
         ("otlp_traces", "openzl", "OTLP + OpenZL", "red", "s", ":"),
         ("otlp_traces", "zstd", "OTLP + zstd", "blue", "o", ":"),
+        # TPC-H formats
+        ("tpch_proto", "openzl", "Proto + OpenZL", "red", "D", "-"),
+        ("tpch_proto", "zstd", "Proto + zstd", "blue", "D", "-"),
+        ("arrow", "zstd", "Arrow + zstd", "green", "p", "-"),
+        ("arrownodict", "zstd", "Arrow nodict + zstd", "olive", "p", "-"),
+        ("arrowdictperfile", "zstd", "Arrow dictperfile + zstd", "teal", "p", "-"),
     ]
 
 
@@ -159,8 +187,10 @@ def get_compression_ratio_series_configs():
     Each config: (compressor, method, label, color, marker, linestyle)
     method can be 'zstd', 'openzl', or 'raw' (uncompressed)
     Note: OTAP variants (nodict, dictperfile) only show zstd and raw, not OpenZL.
+    Note: TPC-H Arrow variants only show zstd, not OpenZL.
     """
     return [
+        # OTel formats
         ("otap", "zstd", "OTAP + zstd", "blue", "^", "-"),
         ("otap", "raw", "OTAP raw", "gray", "x", "-"),
         ("otapnodict", "zstd", "OTAP nodict + zstd", "purple", "^", "-"),
@@ -171,6 +201,12 @@ def get_compression_ratio_series_configs():
         ("otlp_metrics", "zstd", "OTLP + zstd", "blue", "o", ":"),
         ("otlp_traces", "openzl", "OTLP + OpenZL", "red", "s", ":"),
         ("otlp_traces", "zstd", "OTLP + zstd", "blue", "o", ":"),
+        # TPC-H formats
+        ("tpch_proto", "openzl", "Proto + OpenZL", "red", "D", "-"),
+        ("tpch_proto", "zstd", "Proto + zstd", "blue", "D", "-"),
+        ("arrow", "zstd", "Arrow + zstd", "green", "p", "-"),
+        ("arrownodict", "zstd", "Arrow nodict + zstd", "olive", "p", "-"),
+        ("arrowdictperfile", "zstd", "Arrow dictperfile + zstd", "teal", "p", "-"),
     ]
 
 

@@ -117,6 +117,31 @@ impl ProtoSerializer {
         dst.truncate(written);
         Ok(dst)
     }
+
+    /// Compress TPC-H Proto bytes using proto-aware compression
+    ///
+    /// Takes raw protobuf bytes (TpchBatch) and returns compressed bytes
+    /// using proto-aware type-split compression.
+    pub fn compress_tpch_proto(&mut self, proto_bytes: &[u8]) -> Result<Vec<u8>> {
+        let bound = compress_bound(proto_bytes.len());
+        let mut dst = vec![0u8; bound];
+
+        let written = unsafe {
+            ffi::ZL_ProtoSerializer_compressTpch(
+                self.ptr.as_ptr(),
+                dst.as_mut_ptr() as *mut c_void,
+                dst.len(),
+                proto_bytes.as_ptr() as *const c_void,
+                proto_bytes.len(),
+            )
+        };
+
+        if written == 0 {
+            return Err(OpenZLError::CompressionFailed(0));
+        }
+        dst.truncate(written);
+        Ok(dst)
+    }
 }
 
 impl Drop for ProtoSerializer {
@@ -220,6 +245,31 @@ impl ProtoDeserializer {
         dst.truncate(written);
         Ok(dst)
     }
+
+    /// Decompress TPC-H Proto bytes using proto-aware decompression
+    ///
+    /// Takes compressed bytes and returns the original protobuf bytes
+    /// (TpchBatch).
+    pub fn decompress_tpch_proto(&mut self, compressed: &[u8]) -> Result<Vec<u8>> {
+        let capacity = compressed.len() * 200;
+        let mut dst = vec![0u8; capacity];
+
+        let written = unsafe {
+            ffi::ZL_ProtoDeserializer_decompressTpch(
+                self.ptr.as_ptr(),
+                dst.as_mut_ptr() as *mut c_void,
+                dst.len(),
+                compressed.as_ptr() as *const c_void,
+                compressed.len(),
+            )
+        };
+
+        if written == 0 {
+            return Err(OpenZLError::DecompressionFailed(0));
+        }
+        dst.truncate(written);
+        Ok(dst)
+    }
 }
 
 impl Drop for ProtoDeserializer {
@@ -264,6 +314,19 @@ pub fn compare_otlp_traces(proto1: &[u8], proto2: &[u8]) -> bool {
 pub fn compare_otap(proto1: &[u8], proto2: &[u8]) -> bool {
     let result = unsafe {
         ffi::ZL_Proto_compareOtap(
+            proto1.as_ptr() as *const c_void,
+            proto1.len(),
+            proto2.as_ptr() as *const c_void,
+            proto2.len(),
+        )
+    };
+    result == 1
+}
+
+/// Compare two TPC-H Proto messages for semantic equality
+pub fn compare_tpch_proto(proto1: &[u8], proto2: &[u8]) -> bool {
+    let result = unsafe {
+        ffi::ZL_Proto_compareTpch(
             proto1.as_ptr() as *const c_void,
             proto1.len(),
             proto2.as_ptr() as *const c_void,

@@ -2,15 +2,27 @@
 """
 OpenZL Compressor Training Tool
 
-Simplified version: Samples 5000 files per schema type and trains 3 compressors.
-Creates training directories: data/otap/, data/otlp_metrics/, data/otlp_traces/
+Simplified version: Samples 100 files per schema type and trains compressors.
+Creates training directories: data/otap/, data/otlp_metrics/, data/otlp_traces/, data/tpch_proto/
+
+Usage:
+    python train_compressors.py                    # Train all schemas
+    python train_compressors.py --schema tpch     # Train only TPC-H
+    python train_compressors.py --schema otel     # Train only OTel (otap, otlp_metrics, otlp_traces)
+    python train_compressors.py --schema otap     # Train only otap
 """
 
+import argparse
 import random
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+# Schema groups for convenience
+OTEL_SCHEMAS = ["otap", "otlp_metrics", "otlp_traces"]
+TPCH_SCHEMAS = ["tpch_proto"]
+ALL_SCHEMAS = OTEL_SCHEMAS + TPCH_SCHEMAS
 
 
 def discover_data_folders(data_dir: Path) -> dict[str, list[Path]]:
@@ -19,9 +31,14 @@ def discover_data_folders(data_dir: Path) -> dict[str, list[Path]]:
 
     Returns:
         Dictionary mapping schema type to list of folder paths
-        e.g., {"otap": [...], "otlp_metrics": [...], "otlp_traces": [...]}
+        e.g., {"otap": [...], "otlp_metrics": [...], "otlp_traces": [...], "tpch_proto": [...]}
     """
-    schema_folders = {"otap": [], "otlp_metrics": [], "otlp_traces": []}
+    schema_folders = {
+        "otap": [],
+        "otlp_metrics": [],
+        "otlp_traces": [],
+        "tpch_proto": [],
+    }
 
     for folder_path in sorted(data_dir.iterdir()):
         if not folder_path.is_dir():
@@ -42,12 +59,15 @@ def discover_data_folders(data_dir: Path) -> dict[str, list[Path]]:
             schema_folders["otap"].append(folder_path)
         elif "oteltraces" in folder_name and "-otlp-" in folder_name:
             schema_folders["otlp_traces"].append(folder_path)
+        # TPC-H proto format (only proto, not arrow)
+        elif folder_name.startswith("tpch-") and "-proto-" in folder_name:
+            schema_folders["tpch_proto"].append(folder_path)
 
     return schema_folders
 
 
 def sample_files_for_schema(
-    folders: list[Path], num_files: int = 5000, seed: int = 42
+    folders: list[Path], num_files: int = 100, seed: int = 42
 ) -> list[Path]:
     """
     Sample random payload files from all folders for a schema.
@@ -174,8 +194,42 @@ def train_compressor(
     return "Training completed successfully"
 
 
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Train OpenZL compressors for different schema types"
+    )
+    parser.add_argument(
+        "--schema",
+        type=str,
+        default="all",
+        help="Schema(s) to train: 'all', 'otel', 'tpch', or specific schema name (otap, otlp_metrics, otlp_traces, tpch_proto)",
+    )
+    return parser.parse_args()
+
+
+def get_schemas_to_train(schema_arg: str) -> list[str]:
+    """Convert schema argument to list of schema names."""
+    schema_arg = schema_arg.lower()
+    if schema_arg == "all":
+        return ALL_SCHEMAS
+    elif schema_arg == "otel":
+        return OTEL_SCHEMAS
+    elif schema_arg == "tpch":
+        return TPCH_SCHEMAS
+    elif schema_arg in ALL_SCHEMAS:
+        return [schema_arg]
+    else:
+        print(f"Error: Unknown schema '{schema_arg}'")
+        print(f"Valid options: all, otel, tpch, {', '.join(ALL_SCHEMAS)}")
+        sys.exit(1)
+
+
 def main():
     """Main entry point."""
+    args = parse_args()
+    schema_list = get_schemas_to_train(args.schema)
+
     script_dir = Path(__file__).parent.resolve()
     source_dir = script_dir.parent / "data" / "generated"
     data_dir = script_dir.parent / "data"
@@ -188,8 +242,9 @@ def main():
     data_dir.mkdir(exist_ok=True)
 
     print("=" * 80)
-    print("OpenZL Compressor Training - Simplified Mode")
-    print("Sampling 5000 files per schema type for training")
+    print("OpenZL Compressor Training")
+    print(f"Training schemas: {', '.join(schema_list)}")
+    print("Sampling 100 files per schema type for training")
     print("=" * 80)
     print()
 
@@ -197,7 +252,8 @@ def main():
     print("Discovering data folders...")
     schema_folders = discover_data_folders(source_dir)
 
-    for schema_name, folders in schema_folders.items():
+    for schema_name in schema_list:
+        folders = schema_folders.get(schema_name, [])
         print(f"  {schema_name}: {len(folders)} folders")
 
     print()
@@ -206,7 +262,7 @@ def main():
     success_count = 0
     failure_count = 0
 
-    for schema_name in ["otap", "otlp_metrics", "otlp_traces"]:
+    for schema_name in schema_list:
         folders = schema_folders[schema_name]
 
         if not folders:
@@ -218,7 +274,7 @@ def main():
 
         try:
             # Sample files from all folders for this schema
-            sampled_files = sample_files_for_schema(folders, num_files=5000)
+            sampled_files = sample_files_for_schema(folders, num_files=100)
 
             # Prepare training directory
             train_dir = prepare_schema_train_dir(data_dir, schema_name, sampled_files)
@@ -237,21 +293,17 @@ def main():
         print()  # Blank line between schemas
 
     # Summary
+    total_schemas = len(schema_list)
     print("=" * 80)
     print("Training complete!")
-    print(f"  Success: {success_count}/3")
-    print(f"  Failures: {failure_count}/3")
+    print(f"  Success: {success_count}/{total_schemas}")
+    print(f"  Failures: {failure_count}/{total_schemas}")
     print()
     print("Output structure:")
-    print("  data/otap/")
-    print("    ├── payload_0000.bin ... payload_0009.bin (5000 training files)")
-    print("    └── trained.zlc")
-    print("  data/otlp_metrics/")
-    print("    ├── payload_0000.bin ... payload_0009.bin")
-    print("    └── trained.zlc")
-    print("  data/otlp_traces/")
-    print("    ├── payload_0000.bin ... payload_0009.bin")
-    print("    └── trained.zlc")
+    for schema_name in schema_list:
+        print(f"  data/{schema_name}/")
+        print("    ├── payload_0000.bin ...")
+        print("    └── trained.zlc")
     print("=" * 80)
 
     if failure_count > 0:
