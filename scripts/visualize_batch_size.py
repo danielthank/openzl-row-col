@@ -161,52 +161,65 @@ def get_series_configs():
     Each config: (compressor, method, label, color, marker, linestyle)
     Note: OTAP variants (nodict, dictperfile) only show zstd, not OpenZL.
     Note: TPC-H Arrow variants only show zstd, not OpenZL.
+
+    Color scheme (unified across OTAP/Arrow):
+    - Native (incremental dict): blue
+    - nodict: purple
+    - dictperfile: cyan
+    Row-based formats use dotted lines, column-based use solid lines.
     """
     return [
-        # OTel formats
-        ("otap", "zstd", "OTAP + zstd", "blue", "^", "-"),
-        ("otapnodict", "zstd", "OTAP nodict + zstd", "purple", "^", "-"),
-        ("otapdictperfile", "zstd", "OTAP dictperfile + zstd", "cyan", "^", "-"),
+        # OTel formats - column-based (solid)
+        ("otap", "zstd", "OTAP (delta dict) + zstd", "blue", "^", "-"),
+        ("otapnodict", "zstd", "OTAP (no dict) + zstd", "purple", "^", "-"),
+        ("otapdictperfile", "zstd", "OTAP (dict/batch) + zstd", "cyan", "^", "-"),
+        # OTel formats - row-based (dotted)
         ("otlp_metrics", "openzl", "OTLP + OpenZL", "red", "s", ":"),
-        ("otlp_metrics", "zstd", "OTLP + zstd", "blue", "o", ":"),
+        ("otlp_metrics", "zstd", "OTLP + zstd", "green", "o", ":"),
         ("otlp_traces", "openzl", "OTLP + OpenZL", "red", "s", ":"),
-        ("otlp_traces", "zstd", "OTLP + zstd", "blue", "o", ":"),
-        # TPC-H formats
-        ("tpch_proto", "openzl", "Proto + OpenZL", "red", "D", "-"),
-        ("tpch_proto", "zstd", "Proto + zstd", "blue", "D", "-"),
-        ("arrow", "zstd", "Arrow + zstd", "green", "p", "-"),
-        ("arrownodict", "zstd", "Arrow nodict + zstd", "olive", "p", "-"),
-        ("arrowdictperfile", "zstd", "Arrow dictperfile + zstd", "teal", "p", "-"),
+        ("otlp_traces", "zstd", "OTLP + zstd", "green", "o", ":"),
+        # TPC-H formats - column-based (solid)
+        ("arrow", "zstd", "Arrow (delta dict) + zstd", "blue", "p", "-"),
+        ("arrownodict", "zstd", "Arrow (no dict) + zstd", "purple", "p", "-"),
+        ("arrowdictperfile", "zstd", "Arrow (dict/batch) + zstd", "cyan", "p", "-"),
+        # TPC-H formats - row-based (dotted)
+        ("tpch_proto", "openzl", "Proto + OpenZL", "red", "D", ":"),
+        ("tpch_proto", "zstd", "Proto + zstd", "green", "D", ":"),
     ]
 
 
 def get_compression_ratio_series_configs():
     """
-    Return series configurations for compression ratio plots (includes OTAP raw).
+    Return series configurations for compression ratio plots.
 
     Each config: (compressor, method, label, color, marker, linestyle)
     method can be 'zstd', 'openzl', or 'raw' (uncompressed)
-    Note: OTAP variants (nodict, dictperfile) only show zstd and raw, not OpenZL.
+    Note: OTAP variants (nodict, dictperfile) only show zstd, not OpenZL.
     Note: TPC-H Arrow variants only show zstd, not OpenZL.
+
+    Color scheme (unified across OTAP/Arrow):
+    - Native (incremental dict): blue
+    - nodict: purple
+    - dictperfile: cyan
+    Row-based formats use dotted lines, column-based use solid lines.
     """
     return [
-        # OTel formats
-        ("otap", "zstd", "OTAP + zstd", "blue", "^", "-"),
-        ("otap", "raw", "OTAP raw", "gray", "x", "-"),
-        ("otapnodict", "zstd", "OTAP nodict + zstd", "purple", "^", "-"),
-        ("otapnodict", "raw", "OTAP nodict raw", "darkgray", "x", "-"),
-        ("otapdictperfile", "zstd", "OTAP dictperfile + zstd", "cyan", "^", "-"),
-        ("otapdictperfile", "raw", "OTAP dictperfile raw", "lightgray", "x", "-"),
+        # OTel formats - column-based (solid)
+        ("otap", "zstd", "OTAP (delta dict) + zstd", "blue", "^", "-"),
+        ("otapnodict", "zstd", "OTAP (no dict) + zstd", "purple", "^", "-"),
+        ("otapdictperfile", "zstd", "OTAP (dict/batch) + zstd", "cyan", "^", "-"),
+        # OTel formats - row-based (dotted)
         ("otlp_metrics", "openzl", "OTLP + OpenZL", "red", "s", ":"),
-        ("otlp_metrics", "zstd", "OTLP + zstd", "blue", "o", ":"),
+        ("otlp_metrics", "zstd", "OTLP + zstd", "green", "o", ":"),
         ("otlp_traces", "openzl", "OTLP + OpenZL", "red", "s", ":"),
-        ("otlp_traces", "zstd", "OTLP + zstd", "blue", "o", ":"),
-        # TPC-H formats
-        ("tpch_proto", "openzl", "Proto + OpenZL", "red", "D", "-"),
-        ("tpch_proto", "zstd", "Proto + zstd", "blue", "D", "-"),
-        ("arrow", "zstd", "Arrow + zstd", "green", "p", "-"),
-        ("arrownodict", "zstd", "Arrow nodict + zstd", "olive", "p", "-"),
-        ("arrowdictperfile", "zstd", "Arrow dictperfile + zstd", "teal", "p", "-"),
+        ("otlp_traces", "zstd", "OTLP + zstd", "green", "o", ":"),
+        # TPC-H formats - column-based (solid)
+        ("arrow", "zstd", "Arrow (delta dict) + zstd", "blue", "p", "-"),
+        ("arrownodict", "zstd", "Arrow (no dict) + zstd", "purple", "p", "-"),
+        ("arrowdictperfile", "zstd", "Arrow (dict/batch) + zstd", "cyan", "p", "-"),
+        # TPC-H formats - row-based (dotted)
+        ("tpch_proto", "openzl", "Proto + OpenZL", "red", "D", ":"),
+        ("tpch_proto", "zstd", "Proto + zstd", "green", "D", ":"),
     ]
 
 

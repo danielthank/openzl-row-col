@@ -38,7 +38,7 @@ cargo build --release
 
 ### Workflow
 
-1. **Rebatch testdata**:
+1. **Rebatch OTel testdata**:
    ```bash
    cd go && go run ./cmd/rebatch \
        --input ../testdata/astronomy-otelmetrics.zst \
@@ -48,28 +48,47 @@ cargo build --release
    ```
    Options:
    - `--input <FILE>`: Input .zst file
-   - `--mode <metrics|traces>`: Data type
+   - `--mode <metrics|traces|dump>`: Data type or dump mode
    - `--batch-size <SIZES>`: Comma-separated batch sizes
    - `--format <FORMATS>`: otlp, otap, otapnodict, otapdictperfile
+   - `--dump-file <FILE>`: File to dump (for dump mode)
 
-2. **Train compressors**:
+2. **Generate TPC-H data**:
    ```bash
-   cd scripts && python3 train_compressors.py && cd ..
-   ```
-
-3. **Run benchmarks**:
-   ```bash
-   cargo run --release --bin benchmark -- --zstd-level 4 --iterations 3
+   cd go && go run ./cmd/tpch-gen \
+       --data-dir /path/to/tpch/tbl/files \
+       --batch-size 1000,10000 \
+       --format proto,arrow,arrownodict,arrowdictperfile \
+       --tables lineitem,orders
    ```
    Options:
-   - `--zstd-level <1-22>`: Zstd compression level (default: 4)
+   - `--data-dir <PATH>`: Directory containing TPC-H .tbl files (required)
+   - `--batch-size <SIZES>`: Comma-separated batch sizes (default: 1000)
+   - `--format <FORMATS>`: proto, arrow, arrownodict, arrowdictperfile (default: proto,arrow)
+   - `--tables <TABLES>`: Comma-separated tables (default: lineitem,orders)
+   - `--output <PATH>`: Output directory (default: ../data/generated)
+
+3. **Train compressors**:
+   ```bash
+   cd scripts && python3 train_compressors.py --schema all && cd ..
+   ```
+   Options:
+   - `--schema <SCHEMA>`: Schema(s) to train: all, otel, tpch, or specific name (otap, otlp_metrics, otlp_traces, tpch_proto)
+
+4. **Run benchmarks**:
+   ```bash
+   cargo run --release --bin benchmark -- --zstd-level 7 --iterations 3
+   ```
+   Options:
+   - `--zstd-level <1-22>`: Zstd compression level (default: 7)
    - `--iterations <N>`: Iterations per dataset (default: 3)
    - `--data-dir <PATH>`: Data directory (default: data/generated/)
    - `--compressor-dir <PATH>`: Compressor directory (default: data)
+   - `--dataset <all|otel|tpch>`: Filter datasets to benchmark (default: all)
 
    Output: `data/benchmark_results_zstd{level}_iter{N}.json`
 
-4. **Visualize results**:
+5. **Visualize results**:
    ```bash
    cd scripts && uv run visualize_batch_size.py [INPUT] [--output-dir DIR]
    ```
@@ -86,7 +105,9 @@ cargo build --release
 
 ### Go
 
-- **go/cmd/rebatch**: CLI tool for rebatching testdata
+- **go/cmd/rebatch**: CLI tool for rebatching OTel testdata
+- **go/cmd/tpch-gen**: CLI tool for generating TPC-H benchmark data
+- **go/pkg/arrowutil**: Arrow IPC producer with incremental dictionary support
 
 ### Scripts
 
@@ -106,14 +127,19 @@ cargo build --release
 │   ├── openzl/                     # Safe wrapper
 │   └── benchmarks/                 # Benchmarks
 ├── go/
-│   └── cmd/rebatch/                # Rebatch tool (Go)
+│   ├── cmd/
+│   │   ├── rebatch/                # OTel rebatch tool
+│   │   └── tpch-gen/               # TPC-H data generator
+│   └── pkg/
+│       ├── arrowutil/              # Arrow IPC producer
+│       └── tpch/                   # TPC-H protobuf definitions
 ├── scripts/
 │   ├── train_compressors.py        # Training script
 │   └── visualize_batch_size.py     # Visualization script
 ├── testdata/
-│   └── *.zst                       # Source data
+│   └── *.zst                       # Source OTel data
 └── data/
-    ├── generated/                  # Rebatched data
+    ├── generated/                  # Generated benchmark data
     ├── otap/                       # Trained compressors
     ├── otlp_metrics/
     └── otlp_traces/
