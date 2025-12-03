@@ -39,17 +39,25 @@ cargo build --release
 
 1. **Rebatch OTel testdata**:
    ```bash
+   # Metrics
    cd go && go run ./cmd/rebatch \
        --input ../testdata/astronomy-otelmetrics.zst \
        --mode metrics \
        --batch-size 10,100,1000 \
        --format otlp,otlpmetricsdict,otap,otapnodict,otapdictperfile
+
+   # Traces
+   cd go && go run ./cmd/rebatch \
+       --input ../testdata/hipstershop-oteltraces.zst \
+       --mode traces \
+       --batch-size 10,100,1000 \
+       --format otlp,otlptracesdict,otap,otapnodict,otapdictperfile
    ```
    Options:
    - `--input <FILE>`: Input .zst file
    - `--mode <metrics|traces|dump>`: Data type or dump mode
    - `--batch-size <SIZES>`: Comma-separated batch sizes
-   - `--format <FORMATS>`: otlp, otlpmetricsdict, otap, otapnodict, otapdictperfile
+   - `--format <FORMATS>`: otlp, otlpmetricsdict, otlptracesdict, otap, otapnodict, otapdictperfile
    - `--dump-file <FILE>`: File to dump (for dump mode)
 
 2. **Generate TPC-H data**:
@@ -72,7 +80,7 @@ cargo build --release
    cd scripts && python3 train_compressors.py --schema all && cd ..
    ```
    Options:
-   - `--schema <SCHEMA>`: Schema(s) to train: all, otel, tpch, or specific name (otap, otlp_metrics, otlp_traces, otlpmetricsdict, tpch_proto)
+   - `--schema <SCHEMA>`: Schema(s) to train: all, otel, tpch, or specific name (otap, otlp_metrics, otlp_traces, otlpmetricsdict, otlptracesdict, tpch_proto)
 
 4. **Run benchmarks**:
    ```bash
@@ -86,7 +94,11 @@ cargo build --release
    - `--compressor-dir <PATH>`: Compressor directory (default: data)
    - `--dataset <all|otel|tpch>`: Filter datasets to benchmark (default: all)
 
-   Output: `data/benchmark_results_zstd{level}_iter{N}.json`
+   Benchmark modes:
+   - **zstd + OpenZL**: otlp, otlpmetricsdict, otlptracesdict, tpch_proto
+   - **zstd-only**: otap, otapnodict, otapdictperfile, arrow, arrownodict, arrowdictperfile
+
+   Output: `data/benchmark_{dataset}_zstd{level}_iter{N}.json`
 
 5. **Visualize results**:
    ```bash
@@ -131,6 +143,8 @@ cargo build --release
 │   │   └── tpch-gen/               # TPC-H data generator
 │   └── pkg/
 │       ├── arrowutil/              # Arrow IPC producer
+│       ├── otlpmetricsdict/        # Dictionary-encoded OTLP metrics
+│       ├── otlptracesdict/         # Dictionary-encoded OTLP traces
 │       └── tpch/                   # TPC-H protobuf definitions
 ├── scripts/
 │   ├── train_compressors.py        # Training script
@@ -142,7 +156,8 @@ cargo build --release
     ├── otap/                       # Trained compressors
     ├── otlp_metrics/
     ├── otlp_traces/
-    └── otlpmetricsdict/
+    ├── otlpmetricsdict/
+    └── otlptracesdict/
 ```
 
 ## License

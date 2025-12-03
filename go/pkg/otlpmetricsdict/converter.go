@@ -1,4 +1,4 @@
-package otlpdict
+package otlpmetricsdict
 
 import (
 	"go.opentelemetry.io/collector/pdata/pcommon"

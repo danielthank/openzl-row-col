@@ -3,9 +3,9 @@
 
 syntax = "proto3";
 
-package otlpdict;
+package otlpmetricsdict;
 
-option go_package = "github.com/danielthank/15712/go/pkg/otlpdict";
+option go_package = "github.com/danielthank/15712/go/pkg/otlpmetricsdict";
 
 // MetricsDictBatch wraps metrics data with a string table for dictionary encoding
 message MetricsDictBatch {

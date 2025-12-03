@@ -57,8 +57,8 @@ def extract_compression_ratio_series(
     filtered = [r for r in dataset_results if r["compressor"] == compressor]
     filtered.sort(key=lambda x: x["batch_size"])
 
-    # For OTAP variants and otlpmetricsdict, we need to use OTLP uncompressed bytes as the baseline
-    if compressor in ("otap", "otapnodict", "otapdictperfile", "otlpmetricsdict"):
+    # For OTAP variants and otlpdict variants, we need to use OTLP uncompressed bytes as the baseline
+    if compressor in ("otap", "otapnodict", "otapdictperfile", "otlpmetricsdict", "otlptracesdict"):
         # Build lookup of OTLP uncompressed bytes by batch_size
         otlp_baseline = {}
         for r in dataset_results:
@@ -180,6 +180,8 @@ def get_series_configs():
         ("otlp_traces", "zstd", "OTLP + zstd", "green", "o", ":"),
         ("otlpmetricsdict", "openzl", "OTLP (dict) + OpenZL", "orange", "h", ":"),
         ("otlpmetricsdict", "zstd", "OTLP (dict) + zstd", "brown", "h", ":"),
+        ("otlptracesdict", "openzl", "OTLP (dict) + OpenZL", "orange", "h", ":"),
+        ("otlptracesdict", "zstd", "OTLP (dict) + zstd", "brown", "h", ":"),
         # TPC-H formats - column-based (solid)
         ("arrow", "zstd", "Arrow (delta dict) + zstd", "blue", "p", "-"),
         ("arrownodict", "zstd", "Arrow (no dict) + zstd", "purple", "p", "-"),
@@ -217,6 +219,8 @@ def get_compression_ratio_series_configs():
         ("otlp_traces", "zstd", "OTLP + zstd", "green", "o", ":"),
         ("otlpmetricsdict", "openzl", "OTLP (dict) + OpenZL", "orange", "h", ":"),
         ("otlpmetricsdict", "zstd", "OTLP (dict) + zstd", "brown", "h", ":"),
+        ("otlptracesdict", "openzl", "OTLP (dict) + OpenZL", "orange", "h", ":"),
+        ("otlptracesdict", "zstd", "OTLP (dict) + zstd", "brown", "h", ":"),
         # TPC-H formats - column-based (solid)
         ("arrow", "zstd", "Arrow (delta dict) + zstd", "blue", "p", "-"),
         ("arrownodict", "zstd", "Arrow (no dict) + zstd", "purple", "p", "-"),

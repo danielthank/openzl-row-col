@@ -223,12 +223,12 @@ fn main() -> Result<()> {
             // Parse directory name to get dataset, format, and batch_size
             let batch_info = parse_batch_dir_name(dir_name).ok()?;
 
-            // Check if this is an Arrow format (zstd-only, no OpenZL)
-            if let Some(arrow_format) = batch_info.arrow_format_name() {
+            // Check if this is a zstd-only format (OTAP, Arrow - no OpenZL)
+            if let Some(format_name) = batch_info.zstd_only_format_name() {
                 match run_zstd_only_benchmark(
                     batch_dir,
                     &batch_info,
-                    arrow_format,
+                    format_name,
                     args.zstd_level,
                     args.iterations,
                 ) {
@@ -243,7 +243,7 @@ fn main() -> Result<()> {
                         eprintln!(
                             "Warning: Benchmark failed for {} with {}: {}",
                             batch_dir.display(),
-                            arrow_format,
+                            format_name,
                             e
                         );
                         return None;

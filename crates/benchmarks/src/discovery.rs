@@ -43,6 +43,7 @@ pub fn discover_compressors(data_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
         "otlp_metrics",
         "otlp_traces",
         "otlpmetricsdict",
+        "otlptracesdict",
         "tpch_proto",
     ] {
         let schema_dir = data_dir.join(schema);
@@ -74,12 +75,12 @@ impl BatchDirInfo {
     /// Returns None for Arrow formats (uses zstd-only, no OpenZL).
     pub fn compressor_name(&self) -> Option<&str> {
         match self.format.as_str() {
-            // OTel formats
-            "otap" | "otapnodict" | "otapdictperfile" => Some(&self.format),
+            // OTel formats (OTAP uses zstd-only, no OpenZL)
             "otlp" if self.dataset.contains("otelmetrics") => Some("otlp_metrics"),
             "otlp" if self.dataset.contains("oteltraces") => Some("otlp_traces"),
             // OTLP with dictionary-encoded attribute keys
             "otlpmetricsdict" => Some("otlpmetricsdict"),
+            "otlptracesdict" => Some("otlptracesdict"),
             // TPC-H proto format (Arrow uses zstd-only, no OpenZL)
             "proto" if self.dataset.starts_with("tpch-") => Some("tpch_proto"),
             _ => None,
@@ -87,32 +88,35 @@ impl BatchDirInfo {
     }
 
     /// Get the trained compressor file to load
-    /// All OTAP variants use the same trained "otap" compressor.
-    /// Returns None for Arrow formats (uses zstd-only, no OpenZL).
+    /// Returns None for zstd-only formats (OTAP, Arrow).
     pub fn trained_compressor_name(&self) -> Option<&'static str> {
         match self.format.as_str() {
-            // OTel formats
-            "otap" | "otapnodict" | "otapdictperfile" => Some("otap"),
+            // OTel formats (OTAP uses zstd-only, no OpenZL)
             "otlp" if self.dataset.contains("otelmetrics") => Some("otlp_metrics"),
             "otlp" if self.dataset.contains("oteltraces") => Some("otlp_traces"),
             // OTLP with dictionary-encoded attribute keys
             "otlpmetricsdict" => Some("otlpmetricsdict"),
+            "otlptracesdict" => Some("otlptracesdict"),
             // TPC-H proto format (Arrow uses zstd-only, no OpenZL)
             "proto" if self.dataset.starts_with("tpch-") => Some("tpch_proto"),
             _ => None,
         }
     }
 
-    /// Check if this format uses Arrow (for zstd-only benchmarks)
-    pub fn is_arrow_format(&self) -> bool {
-        matches!(self.format.as_str(), "arrow" | "arrownodict" | "arrowdictperfile")
-            && self.dataset.starts_with("tpch-")
+    /// Check if this format is zstd-only (no OpenZL benchmark)
+    pub fn is_zstd_only_format(&self) -> bool {
+        // Arrow formats for TPC-H
+        let is_arrow = matches!(self.format.as_str(), "arrow" | "arrownodict" | "arrowdictperfile")
+            && self.dataset.starts_with("tpch-");
+        // OTAP formats for OTel
+        let is_otap = matches!(self.format.as_str(), "otap" | "otapnodict" | "otapdictperfile");
+        is_arrow || is_otap
     }
 
-    /// Get the Arrow format name for zstd-only benchmarks
-    /// Returns the format name (arrow, arrownodict, arrowdictperfile) for Arrow formats.
-    pub fn arrow_format_name(&self) -> Option<&str> {
-        if self.is_arrow_format() {
+    /// Get the format name for zstd-only benchmarks
+    /// Returns the format name for Arrow/OTAP formats (zstd-only, no OpenZL).
+    pub fn zstd_only_format_name(&self) -> Option<&str> {
+        if self.is_zstd_only_format() {
             Some(&self.format)
         } else {
             None

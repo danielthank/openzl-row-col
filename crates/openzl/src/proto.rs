@@ -14,6 +14,7 @@ pub enum ProtoSchema {
     Otap = 2,
     Tpch = 3,
     OtlpMetricsDict = 4,
+    OtlpTracesDict = 5,
 }
 
 impl ProtoSchema {
@@ -23,6 +24,7 @@ impl ProtoSchema {
             "otlp_metrics" => Some(Self::OtlpMetrics),
             "otlp_traces" => Some(Self::OtlpTraces),
             "otlpmetricsdict" => Some(Self::OtlpMetricsDict),
+            "otlptracesdict" => Some(Self::OtlpTracesDict),
             "otap" | "otapnodict" | "otapdictperfile" => Some(Self::Otap),
             "tpch_proto" => Some(Self::Tpch),
             _ => None,

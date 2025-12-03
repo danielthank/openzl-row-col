@@ -3,13 +3,13 @@
 OpenZL Compressor Training Tool
 
 Simplified version: Samples 100 files per schema type and trains compressors.
-Creates training directories: data/otap/, data/otlp_metrics/, data/otlp_traces/, data/otlpmetricsdict/, data/tpch_proto/
+Creates training directories: data/otap/, data/otlp_metrics/, data/otlp_traces/, data/otlpmetricsdict/, data/otlptracesdict/, data/tpch_proto/
 
 Usage:
     python train_compressors.py                           # Train all schemas
     python train_compressors.py --schema tpch             # Train only TPC-H
-    python train_compressors.py --schema otel             # Train only OTel (otap, otlp_metrics, otlp_traces, otlpmetricsdict)
-    python train_compressors.py --schema otlpmetricsdict  # Train only otlpmetricsdict
+    python train_compressors.py --schema otel             # Train only OTel (otap, otlp_metrics, otlp_traces, otlpmetricsdict, otlptracesdict)
+    python train_compressors.py --schema otlptracesdict   # Train only otlptracesdict
 """
 
 import argparse
@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 # Schema groups for convenience
-OTEL_SCHEMAS = ["otap", "otlp_metrics", "otlp_traces", "otlpmetricsdict"]
+OTEL_SCHEMAS = ["otap", "otlp_metrics", "otlp_traces", "otlpmetricsdict", "otlptracesdict"]
 TPCH_SCHEMAS = ["tpch_proto"]
 ALL_SCHEMAS = OTEL_SCHEMAS + TPCH_SCHEMAS
 
@@ -38,6 +38,7 @@ def discover_data_folders(data_dir: Path) -> dict[str, list[Path]]:
         "otlp_metrics": [],
         "otlp_traces": [],
         "otlpmetricsdict": [],
+        "otlptracesdict": [],
         "tpch_proto": [],
     }
 
@@ -63,6 +64,8 @@ def discover_data_folders(data_dir: Path) -> dict[str, list[Path]]:
         # OTLP with dictionary-encoded attribute keys
         elif "otelmetrics" in folder_name and "-otlpmetricsdict-" in folder_name:
             schema_folders["otlpmetricsdict"].append(folder_path)
+        elif "oteltraces" in folder_name and "-otlptracesdict-" in folder_name:
+            schema_folders["otlptracesdict"].append(folder_path)
         # TPC-H proto format (only proto, not arrow)
         elif folder_name.startswith("tpch-") and "-proto-" in folder_name:
             schema_folders["tpch_proto"].append(folder_path)
@@ -207,7 +210,7 @@ def parse_args():
         "--schema",
         type=str,
         default="all",
-        help="Schema(s) to train: 'all', 'otel', 'tpch', or specific schema name (otap, otlp_metrics, otlp_traces, otlpmetricsdict, tpch_proto)",
+        help="Schema(s) to train: 'all', 'otel', 'tpch', or specific schema name (otap, otlp_metrics, otlp_traces, otlpmetricsdict, otlptracesdict, tpch_proto)",
     )
     return parser.parse_args()
 

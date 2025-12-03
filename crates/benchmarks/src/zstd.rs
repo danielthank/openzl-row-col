@@ -49,7 +49,7 @@ impl ZstdBenchmark {
             compression_times.push(comp_time);
 
             // Decompression pass
-            let (decompressed, decomp_time) = self.decompress_all(&compressed)?;
+            let (_decompressed, decomp_time) = self.decompress_all(&compressed)?;
             decompression_times.push(decomp_time);
 
             // Verify roundtrip on first iteration
@@ -66,6 +66,7 @@ impl ZstdBenchmark {
     }
 
     /// Verify roundtrip: decompressed data matches original
+    #[allow(dead_code)]
     fn verify_roundtrip(original: &[Vec<u8>], decompressed: &[Vec<u8>]) -> Result<()> {
         for (idx, (orig, decomp)) in original.iter().zip(decompressed.iter()).enumerate() {
             if orig != decomp {

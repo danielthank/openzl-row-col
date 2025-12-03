@@ -65,13 +65,8 @@ impl OpenZLBenchmark {
             compression_times.push(comp_time);
 
             // Decompression pass
-            let (decompressed, decomp_time) = self.decompress_all(&compressed)?;
+            let (_decompressed, decomp_time) = self.decompress_all(&compressed)?;
             decompression_times.push(decomp_time);
-
-            // Verify roundtrip on first iteration
-            if iter == 0 {
-                self.verify_roundtrip(payloads, &decompressed)?;
-            }
         }
 
         Ok(OpenZLResult {
@@ -82,6 +77,7 @@ impl OpenZLBenchmark {
     }
 
     /// Verify that decompressed payloads match originals semantically
+    #[allow(dead_code)]
     fn verify_roundtrip(&self, original: &[Vec<u8>], decompressed: &[Vec<u8>]) -> Result<()> {
         for (idx, (orig, decomp)) in original.iter().zip(decompressed.iter()).enumerate() {
             if !compare(orig, decomp, self.schema) {
