@@ -57,8 +57,8 @@ def extract_compression_ratio_series(
     filtered = [r for r in dataset_results if r["compressor"] == compressor]
     filtered.sort(key=lambda x: x["batch_size"])
 
-    # For OTAP variants, we need to use OTLP uncompressed bytes as the baseline
-    if compressor in ("otap", "otapnodict", "otapdictperfile"):
+    # For OTAP variants and otlpmetricsdict, we need to use OTLP uncompressed bytes as the baseline
+    if compressor in ("otap", "otapnodict", "otapdictperfile", "otlpmetricsdict"):
         # Build lookup of OTLP uncompressed bytes by batch_size
         otlp_baseline = {}
         for r in dataset_results:
@@ -72,7 +72,7 @@ def extract_compression_ratio_series(
             if batch_size in otlp_baseline:
                 batch_sizes.append(batch_size)
                 if method == "raw":
-                    # OTAP raw = otlp_raw / otap_uncompressed
+                    # raw = otlp_raw / uncompressed
                     ratios.append(otlp_baseline[batch_size] / r["total_uncompressed_bytes"])
                 else:
                     compressed_bytes = r[method]["total_bytes"]
@@ -178,6 +178,8 @@ def get_series_configs():
         ("otlp_metrics", "zstd", "OTLP + zstd", "green", "o", ":"),
         ("otlp_traces", "openzl", "OTLP + OpenZL", "red", "s", ":"),
         ("otlp_traces", "zstd", "OTLP + zstd", "green", "o", ":"),
+        ("otlpmetricsdict", "openzl", "OTLP (dict) + OpenZL", "orange", "h", ":"),
+        ("otlpmetricsdict", "zstd", "OTLP (dict) + zstd", "brown", "h", ":"),
         # TPC-H formats - column-based (solid)
         ("arrow", "zstd", "Arrow (delta dict) + zstd", "blue", "p", "-"),
         ("arrownodict", "zstd", "Arrow (no dict) + zstd", "purple", "p", "-"),
@@ -213,6 +215,8 @@ def get_compression_ratio_series_configs():
         ("otlp_metrics", "zstd", "OTLP + zstd", "green", "o", ":"),
         ("otlp_traces", "openzl", "OTLP + OpenZL", "red", "s", ":"),
         ("otlp_traces", "zstd", "OTLP + zstd", "green", "o", ":"),
+        ("otlpmetricsdict", "openzl", "OTLP (dict) + OpenZL", "orange", "h", ":"),
+        ("otlpmetricsdict", "zstd", "OTLP (dict) + zstd", "brown", "h", ":"),
         # TPC-H formats - column-based (solid)
         ("arrow", "zstd", "Arrow (delta dict) + zstd", "blue", "p", "-"),
         ("arrownodict", "zstd", "Arrow (no dict) + zstd", "purple", "p", "-"),

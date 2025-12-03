@@ -46,6 +46,10 @@ struct Args {
     /// Filter datasets to benchmark: 'all', 'otel', 'tpch'
     #[arg(long, default_value = "all")]
     dataset: String,
+
+    /// Number of threads to use for parallel benchmarking
+    #[arg(long, default_value = "8")]
+    threads: usize,
 }
 
 /// Check if a dataset should be included based on the filter
@@ -171,10 +175,17 @@ fn print_comparison_table(results: &[BenchmarkResult]) {
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Configure Rayon thread pool
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(args.threads)
+        .build_global()
+        .context("Failed to initialize thread pool")?;
+
     println!("OpenZL Benchmark Suite");
     println!("======================");
     println!("Zstd level: {}", args.zstd_level);
     println!("Iterations: {}", args.iterations);
+    println!("Threads: {}", args.threads);
     println!("Dataset filter: {}", args.dataset);
     println!();
 

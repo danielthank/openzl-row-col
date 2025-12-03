@@ -42,6 +42,7 @@ pub fn discover_compressors(data_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
         "otap",
         "otlp_metrics",
         "otlp_traces",
+        "otlpmetricsdict",
         "tpch_proto",
     ] {
         let schema_dir = data_dir.join(schema);
@@ -69,7 +70,7 @@ pub struct BatchDirInfo {
 impl BatchDirInfo {
     /// Get the compressor name to use for this batch
     /// Returns the format for OTAP variants, otlp_metrics/otlp_traces for OTLP,
-    /// or tpch_proto for TPC-H proto format.
+    /// otlpmetricsdict for dictionary-encoded OTLP metrics, or tpch_proto for TPC-H proto format.
     /// Returns None for Arrow formats (uses zstd-only, no OpenZL).
     pub fn compressor_name(&self) -> Option<&str> {
         match self.format.as_str() {
@@ -77,6 +78,8 @@ impl BatchDirInfo {
             "otap" | "otapnodict" | "otapdictperfile" => Some(&self.format),
             "otlp" if self.dataset.contains("otelmetrics") => Some("otlp_metrics"),
             "otlp" if self.dataset.contains("oteltraces") => Some("otlp_traces"),
+            // OTLP with dictionary-encoded attribute keys
+            "otlpmetricsdict" => Some("otlpmetricsdict"),
             // TPC-H proto format (Arrow uses zstd-only, no OpenZL)
             "proto" if self.dataset.starts_with("tpch-") => Some("tpch_proto"),
             _ => None,
@@ -92,6 +95,8 @@ impl BatchDirInfo {
             "otap" | "otapnodict" | "otapdictperfile" => Some("otap"),
             "otlp" if self.dataset.contains("otelmetrics") => Some("otlp_metrics"),
             "otlp" if self.dataset.contains("oteltraces") => Some("otlp_traces"),
+            // OTLP with dictionary-encoded attribute keys
+            "otlpmetricsdict" => Some("otlpmetricsdict"),
             // TPC-H proto format (Arrow uses zstd-only, no OpenZL)
             "proto" if self.dataset.starts_with("tpch-") => Some("tpch_proto"),
             _ => None,

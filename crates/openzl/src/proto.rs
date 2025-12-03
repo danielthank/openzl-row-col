@@ -5,6 +5,31 @@ use openzl_sys as ffi;
 use std::ffi::{c_void, CStr};
 use std::ptr::NonNull;
 
+/// Proto schema identifier matching C enum ZL_ProtoSchema
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtoSchema {
+    OtlpMetrics = 0,
+    OtlpTraces = 1,
+    Otap = 2,
+    Tpch = 3,
+    OtlpMetricsDict = 4,
+}
+
+impl ProtoSchema {
+    /// Create schema from compressor name
+    pub fn from_compressor_name(name: &str) -> Option<Self> {
+        match name {
+            "otlp_metrics" => Some(Self::OtlpMetrics),
+            "otlp_traces" => Some(Self::OtlpTraces),
+            "otlpmetricsdict" => Some(Self::OtlpMetricsDict),
+            "otap" | "otapnodict" | "otapdictperfile" => Some(Self::Otap),
+            "tpch_proto" => Some(Self::Tpch),
+            _ => None,
+        }
+    }
+}
+
 /// Get the last error message from the proto compression library
 fn get_last_proto_error() -> String {
     unsafe {
@@ -43,96 +68,22 @@ impl ProtoSerializer {
             .ok_or(OpenZLError::CompressorCreateFailed)
     }
 
-    /// Compress OTLP metrics proto bytes
+    /// Compress proto bytes using schema-aware compression
     ///
-    /// Takes raw protobuf bytes (ExportMetricsServiceRequest) and returns
-    /// compressed bytes using proto-aware type-split compression.
-    pub fn compress_otlp_metrics(&mut self, proto_bytes: &[u8]) -> Result<Vec<u8>> {
+    /// Takes raw protobuf bytes and returns compressed bytes using
+    /// proto-aware type-split compression.
+    pub fn compress(&mut self, proto_bytes: &[u8], schema: ProtoSchema) -> Result<Vec<u8>> {
         let bound = compress_bound(proto_bytes.len());
         let mut dst = vec![0u8; bound];
 
         let written = unsafe {
-            ffi::ZL_ProtoSerializer_compressOtlpMetrics(
+            ffi::ZL_ProtoSerializer_compress(
                 self.ptr.as_ptr(),
                 dst.as_mut_ptr() as *mut c_void,
                 dst.len(),
                 proto_bytes.as_ptr() as *const c_void,
                 proto_bytes.len(),
-            )
-        };
-
-        if written == 0 {
-            return Err(OpenZLError::CompressionFailed(0));
-        }
-        dst.truncate(written);
-        Ok(dst)
-    }
-
-    /// Compress OTLP traces proto bytes
-    ///
-    /// Takes raw protobuf bytes (ExportTraceServiceRequest) and returns
-    /// compressed bytes using proto-aware type-split compression.
-    pub fn compress_otlp_traces(&mut self, proto_bytes: &[u8]) -> Result<Vec<u8>> {
-        let bound = compress_bound(proto_bytes.len());
-        let mut dst = vec![0u8; bound];
-
-        let written = unsafe {
-            ffi::ZL_ProtoSerializer_compressOtlpTraces(
-                self.ptr.as_ptr(),
-                dst.as_mut_ptr() as *mut c_void,
-                dst.len(),
-                proto_bytes.as_ptr() as *const c_void,
-                proto_bytes.len(),
-            )
-        };
-
-        if written == 0 {
-            return Err(OpenZLError::CompressionFailed(0));
-        }
-        dst.truncate(written);
-        Ok(dst)
-    }
-
-    /// Compress OTAP (BatchArrowRecords) proto bytes
-    ///
-    /// Takes raw protobuf bytes (BatchArrowRecords) and returns
-    /// compressed bytes using proto-aware type-split compression.
-    pub fn compress_otap(&mut self, proto_bytes: &[u8]) -> Result<Vec<u8>> {
-        let bound = compress_bound(proto_bytes.len());
-        let mut dst = vec![0u8; bound];
-
-        let written = unsafe {
-            ffi::ZL_ProtoSerializer_compressOtap(
-                self.ptr.as_ptr(),
-                dst.as_mut_ptr() as *mut c_void,
-                dst.len(),
-                proto_bytes.as_ptr() as *const c_void,
-                proto_bytes.len(),
-            )
-        };
-
-        if written == 0 {
-            return Err(OpenZLError::CompressionFailed(0));
-        }
-        dst.truncate(written);
-        Ok(dst)
-    }
-
-    /// Compress TPC-H Proto bytes using proto-aware compression
-    ///
-    /// Takes raw protobuf bytes (TpchBatch) and returns compressed bytes
-    /// using proto-aware type-split compression.
-    pub fn compress_tpch_proto(&mut self, proto_bytes: &[u8]) -> Result<Vec<u8>> {
-        let bound = compress_bound(proto_bytes.len());
-        let mut dst = vec![0u8; bound];
-
-        let written = unsafe {
-            ffi::ZL_ProtoSerializer_compressTpch(
-                self.ptr.as_ptr(),
-                dst.as_mut_ptr() as *mut c_void,
-                dst.len(),
-                proto_bytes.as_ptr() as *const c_void,
-                proto_bytes.len(),
+                schema as ffi::ZL_ProtoSchema,
             )
         };
 
@@ -166,22 +117,22 @@ impl ProtoDeserializer {
             .ok_or(OpenZLError::DCtxCreateFailed)
     }
 
-    /// Decompress OTLP metrics back to proto bytes
+    /// Decompress proto bytes using schema-aware decompression
     ///
-    /// Takes compressed bytes and returns the original protobuf bytes
-    /// (ExportMetricsServiceRequest).
-    pub fn decompress_otlp_metrics(&mut self, compressed: &[u8]) -> Result<Vec<u8>> {
+    /// Takes compressed bytes and returns the original protobuf bytes.
+    pub fn decompress(&mut self, compressed: &[u8], schema: ProtoSchema) -> Result<Vec<u8>> {
         // Use a large buffer - compression ratios can exceed 100x
         let capacity = compressed.len() * 200;
         let mut dst = vec![0u8; capacity];
 
         let written = unsafe {
-            ffi::ZL_ProtoDeserializer_decompressOtlpMetrics(
+            ffi::ZL_ProtoDeserializer_decompress(
                 self.ptr.as_ptr(),
                 dst.as_mut_ptr() as *mut c_void,
                 dst.len(),
                 compressed.as_ptr() as *const c_void,
                 compressed.len(),
+                schema as ffi::ZL_ProtoSchema,
             )
         };
 
@@ -190,81 +141,6 @@ impl ProtoDeserializer {
             if !error_msg.is_empty() {
                 eprintln!("Proto decompression error: {}", error_msg);
             }
-            return Err(OpenZLError::DecompressionFailed(0));
-        }
-        dst.truncate(written);
-        Ok(dst)
-    }
-
-    /// Decompress OTLP traces back to proto bytes
-    ///
-    /// Takes compressed bytes and returns the original protobuf bytes
-    /// (ExportTraceServiceRequest).
-    pub fn decompress_otlp_traces(&mut self, compressed: &[u8]) -> Result<Vec<u8>> {
-        let capacity = compressed.len() * 200;
-        let mut dst = vec![0u8; capacity];
-
-        let written = unsafe {
-            ffi::ZL_ProtoDeserializer_decompressOtlpTraces(
-                self.ptr.as_ptr(),
-                dst.as_mut_ptr() as *mut c_void,
-                dst.len(),
-                compressed.as_ptr() as *const c_void,
-                compressed.len(),
-            )
-        };
-
-        if written == 0 {
-            return Err(OpenZLError::DecompressionFailed(0));
-        }
-        dst.truncate(written);
-        Ok(dst)
-    }
-
-    /// Decompress OTAP back to proto bytes
-    ///
-    /// Takes compressed bytes and returns the original protobuf bytes
-    /// (BatchArrowRecords).
-    pub fn decompress_otap(&mut self, compressed: &[u8]) -> Result<Vec<u8>> {
-        let capacity = compressed.len() * 200;
-        let mut dst = vec![0u8; capacity];
-
-        let written = unsafe {
-            ffi::ZL_ProtoDeserializer_decompressOtap(
-                self.ptr.as_ptr(),
-                dst.as_mut_ptr() as *mut c_void,
-                dst.len(),
-                compressed.as_ptr() as *const c_void,
-                compressed.len(),
-            )
-        };
-
-        if written == 0 {
-            return Err(OpenZLError::DecompressionFailed(0));
-        }
-        dst.truncate(written);
-        Ok(dst)
-    }
-
-    /// Decompress TPC-H Proto bytes using proto-aware decompression
-    ///
-    /// Takes compressed bytes and returns the original protobuf bytes
-    /// (TpchBatch).
-    pub fn decompress_tpch_proto(&mut self, compressed: &[u8]) -> Result<Vec<u8>> {
-        let capacity = compressed.len() * 200;
-        let mut dst = vec![0u8; capacity];
-
-        let written = unsafe {
-            ffi::ZL_ProtoDeserializer_decompressTpch(
-                self.ptr.as_ptr(),
-                dst.as_mut_ptr() as *mut c_void,
-                dst.len(),
-                compressed.as_ptr() as *const c_void,
-                compressed.len(),
-            )
-        };
-
-        if written == 0 {
             return Err(OpenZLError::DecompressionFailed(0));
         }
         dst.truncate(written);
@@ -280,57 +156,19 @@ impl Drop for ProtoDeserializer {
 
 unsafe impl Send for ProtoDeserializer {}
 
-/// Compare two OTLP metrics proto messages for semantic equality
+/// Compare two proto messages for semantic equality
 ///
 /// This parses both byte arrays as protobuf messages and compares them
 /// semantically rather than byte-for-byte (since protobuf serialization
 /// is not deterministic).
-pub fn compare_otlp_metrics(proto1: &[u8], proto2: &[u8]) -> bool {
+pub fn compare(proto1: &[u8], proto2: &[u8], schema: ProtoSchema) -> bool {
     let result = unsafe {
-        ffi::ZL_Proto_compareOtlpMetrics(
+        ffi::ZL_Proto_compare(
             proto1.as_ptr() as *const c_void,
             proto1.len(),
             proto2.as_ptr() as *const c_void,
             proto2.len(),
-        )
-    };
-    result == 1
-}
-
-/// Compare two OTLP traces proto messages for semantic equality
-pub fn compare_otlp_traces(proto1: &[u8], proto2: &[u8]) -> bool {
-    let result = unsafe {
-        ffi::ZL_Proto_compareOtlpTraces(
-            proto1.as_ptr() as *const c_void,
-            proto1.len(),
-            proto2.as_ptr() as *const c_void,
-            proto2.len(),
-        )
-    };
-    result == 1
-}
-
-/// Compare two OTAP proto messages for semantic equality
-pub fn compare_otap(proto1: &[u8], proto2: &[u8]) -> bool {
-    let result = unsafe {
-        ffi::ZL_Proto_compareOtap(
-            proto1.as_ptr() as *const c_void,
-            proto1.len(),
-            proto2.as_ptr() as *const c_void,
-            proto2.len(),
-        )
-    };
-    result == 1
-}
-
-/// Compare two TPC-H Proto messages for semantic equality
-pub fn compare_tpch_proto(proto1: &[u8], proto2: &[u8]) -> bool {
-    let result = unsafe {
-        ffi::ZL_Proto_compareTpch(
-            proto1.as_ptr() as *const c_void,
-            proto1.len(),
-            proto2.as_ptr() as *const c_void,
-            proto2.len(),
+            schema as ffi::ZL_ProtoSchema,
         )
     };
     result == 1
@@ -384,14 +222,14 @@ mod tests {
         for entry in &entries {
             let proto_bytes = std::fs::read(entry.path()).expect("Failed to read payload");
             let compressed = serializer
-                .compress_otlp_metrics(&proto_bytes)
+                .compress(&proto_bytes, ProtoSchema::OtlpMetrics)
                 .expect("Compression failed");
             let decompressed = deserializer
-                .decompress_otlp_metrics(&compressed)
+                .decompress(&compressed, ProtoSchema::OtlpMetrics)
                 .expect("Decompression failed");
 
             assert!(
-                compare_otlp_metrics(&proto_bytes, &decompressed),
+                compare(&proto_bytes, &decompressed, ProtoSchema::OtlpMetrics),
                 "Roundtrip failed for {:?}",
                 entry.file_name()
             );
@@ -453,14 +291,14 @@ mod tests {
         for entry in &entries {
             let proto_bytes = std::fs::read(entry.path()).expect("Failed to read payload");
             let compressed = serializer
-                .compress_otlp_traces(&proto_bytes)
+                .compress(&proto_bytes, ProtoSchema::OtlpTraces)
                 .expect("Compression failed");
             let decompressed = deserializer
-                .decompress_otlp_traces(&compressed)
+                .decompress(&compressed, ProtoSchema::OtlpTraces)
                 .expect("Decompression failed");
 
             assert!(
-                compare_otlp_traces(&proto_bytes, &decompressed),
+                compare(&proto_bytes, &decompressed, ProtoSchema::OtlpTraces),
                 "Roundtrip failed for {:?}",
                 entry.file_name()
             );
@@ -522,14 +360,14 @@ mod tests {
         for entry in &entries {
             let proto_bytes = std::fs::read(entry.path()).expect("Failed to read payload");
             let compressed = serializer
-                .compress_otap(&proto_bytes)
+                .compress(&proto_bytes, ProtoSchema::Otap)
                 .expect("Compression failed");
             let decompressed = deserializer
-                .decompress_otap(&compressed)
+                .decompress(&compressed, ProtoSchema::Otap)
                 .expect("Decompression failed");
 
             assert!(
-                compare_otap(&proto_bytes, &decompressed),
+                compare(&proto_bytes, &decompressed, ProtoSchema::Otap),
                 "Roundtrip failed for {:?}",
                 entry.file_name()
             );

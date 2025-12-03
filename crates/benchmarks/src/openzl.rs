@@ -1,41 +1,15 @@
 //! OpenZL proto-aware compression/decompression benchmarks
 
 use anyhow::{Context, Result};
-use openzl::proto::{
-    compare_otap, compare_otlp_metrics, compare_otlp_traces, compare_tpch_proto,
-};
+use openzl::proto::{compare, ProtoSchema};
 use openzl::{ProtoDeserializer, ProtoSerializer};
 use std::time::Instant;
-
-/// Proto message type for compression/decompression dispatch
-#[derive(Debug, Clone, Copy)]
-enum ProtoType {
-    OtlpMetrics,
-    OtlpTraces,
-    Otap,
-    TpchProto,
-}
-
-impl ProtoType {
-    /// Determine proto type from compressor name
-    fn from_compressor_name(name: &str) -> Option<Self> {
-        match name {
-            // OTel formats
-            "otlp_metrics" => Some(Self::OtlpMetrics),
-            "otlp_traces" => Some(Self::OtlpTraces),
-            "otap" | "otapnodict" | "otapdictperfile" => Some(Self::Otap),
-            // TPC-H proto format (Arrow doesn't use proto-aware compression)
-            "tpch_proto" => Some(Self::TpchProto),
-            _ => None,
-        }
-    }
-}
 
 /// OpenZL benchmark configuration
 pub struct OpenZLBenchmark {
     serializer: ProtoSerializer,
     deserializer: ProtoDeserializer,
-    proto_type: ProtoType,
+    schema: ProtoSchema,
 }
 
 /// Results from running OpenZL benchmarks
@@ -51,7 +25,7 @@ pub struct OpenZLResult {
 impl OpenZLBenchmark {
     /// Create a new OpenZL benchmark with the specified compressor
     pub fn new(compressor_bytes: &[u8], compressor_name: &str) -> Result<Self> {
-        let proto_type = ProtoType::from_compressor_name(compressor_name)
+        let schema = ProtoSchema::from_compressor_name(compressor_name)
             .ok_or_else(|| anyhow::anyhow!("Unknown compressor type: {}", compressor_name))?;
 
         let serializer = ProtoSerializer::with_compressor(compressor_bytes)
@@ -62,7 +36,7 @@ impl OpenZLBenchmark {
         Ok(Self {
             serializer,
             deserializer,
-            proto_type,
+            schema,
         })
     }
 
@@ -95,9 +69,9 @@ impl OpenZLBenchmark {
             decompression_times.push(decomp_time);
 
             // Verify roundtrip on first iteration
-            // if iter == 0 {
-            //     self.verify_roundtrip(payloads, &decompressed)?;
-            // }
+            if iter == 0 {
+                self.verify_roundtrip(payloads, &decompressed)?;
+            }
         }
 
         Ok(OpenZLResult {
@@ -110,14 +84,7 @@ impl OpenZLBenchmark {
     /// Verify that decompressed payloads match originals semantically
     fn verify_roundtrip(&self, original: &[Vec<u8>], decompressed: &[Vec<u8>]) -> Result<()> {
         for (idx, (orig, decomp)) in original.iter().zip(decompressed.iter()).enumerate() {
-            let equal = match self.proto_type {
-                ProtoType::OtlpMetrics => compare_otlp_metrics(orig, decomp),
-                ProtoType::OtlpTraces => compare_otlp_traces(orig, decomp),
-                ProtoType::Otap => compare_otap(orig, decomp),
-                ProtoType::TpchProto => compare_tpch_proto(orig, decomp),
-            };
-
-            if !equal {
+            if !compare(orig, decomp, self.schema) {
                 anyhow::bail!(
                     "Roundtrip verification failed for payload {}: original {} bytes, decompressed {} bytes",
                     idx,
@@ -137,19 +104,16 @@ impl OpenZLBenchmark {
 
         for (idx, payload) in payloads.iter().enumerate() {
             let start = Instant::now();
-            let result = match self.proto_type {
-                ProtoType::OtlpMetrics => self.serializer.compress_otlp_metrics(payload),
-                ProtoType::OtlpTraces => self.serializer.compress_otlp_traces(payload),
-                ProtoType::Otap => self.serializer.compress_otap(payload),
-                ProtoType::TpchProto => self.serializer.compress_tpch_proto(payload),
-            }
-            .with_context(|| {
-                format!(
-                    "Failed to compress payload {} ({} bytes)",
-                    idx,
-                    payload.len()
-                )
-            })?;
+            let result = self
+                .serializer
+                .compress(payload, self.schema)
+                .with_context(|| {
+                    format!(
+                        "Failed to compress payload {} ({} bytes)",
+                        idx,
+                        payload.len()
+                    )
+                })?;
             total_time += start.elapsed().as_secs_f64() * 1000.0;
             compressed.push(result);
         }
@@ -164,12 +128,7 @@ impl OpenZLBenchmark {
 
         for payload in compressed {
             let start = Instant::now();
-            let result = match self.proto_type {
-                ProtoType::OtlpMetrics => self.deserializer.decompress_otlp_metrics(payload),
-                ProtoType::OtlpTraces => self.deserializer.decompress_otlp_traces(payload),
-                ProtoType::Otap => self.deserializer.decompress_otap(payload),
-                ProtoType::TpchProto => self.deserializer.decompress_tpch_proto(payload),
-            }?;
+            let result = self.deserializer.decompress(payload, self.schema)?;
             total_time += start.elapsed().as_secs_f64() * 1000.0;
             decompressed.push(result);
         }

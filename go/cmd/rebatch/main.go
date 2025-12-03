@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/apache/arrow-go/v18/arrow/ipc"
+	"github.com/danielthank/15712/go/pkg/otlpdict"
 	"github.com/klauspost/compress/zstd"
 	arrowpb "github.com/open-telemetry/otel-arrow/go/api/experimental/arrow/v1"
 	"github.com/open-telemetry/otel-arrow/go/pkg/config"
@@ -74,6 +75,7 @@ func main() {
 	// Parse formats
 	validFormats := map[string]bool{
 		"otlp":            true,
+		"otlpmetricsdict": true,
 		"otap":            true,
 		"otapnodict":      true,
 		"otapdictperfile": true,
@@ -82,7 +84,7 @@ func main() {
 	for _, format := range strings.Split(*formatStr, ",") {
 		format = strings.TrimSpace(format)
 		if !validFormats[format] {
-			fmt.Fprintf(os.Stderr, "Error: invalid format '%s', must be one of: otlp, otap, otapnodict, otapdictperfile\n", format)
+			fmt.Fprintf(os.Stderr, "Error: invalid format '%s', must be one of: otlp, otlpmetricsdict, otap, otapnodict, otapdictperfile\n", format)
 			os.Exit(1)
 		}
 		formats = append(formats, format)
@@ -179,6 +181,8 @@ func processMetrics(inputFile string, batchSizes []int, formats []string) {
 			switch format {
 			case "otlp":
 				writeBatchesOTLPMetrics(batches, outputDir)
+			case "otlpmetricsdict":
+				writeBatchesOTLPDictMetrics(batches, outputDir)
 			case "otap":
 				writeBatchesOTAPMetrics(batches, outputDir, OTAPModeNative)
 			case "otapnodict":
@@ -413,6 +417,27 @@ func writeBatchesOTLPMetrics(batches []pmetric.Metrics, outputDir string) {
 
 	for i, batch := range batches {
 		data, err := marshaler.MarshalMetrics(batch)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error marshaling batch %d: %v\n", i, err)
+			continue
+		}
+
+		outputFile := filepath.Join(outputDir, fmt.Sprintf("payload_%04d.bin", i))
+		if err := os.WriteFile(outputFile, data, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing file: %v\n", err)
+			continue
+		}
+	}
+
+	fmt.Printf("  Wrote %d batches to %s\n", len(batches), outputDir)
+}
+
+func writeBatchesOTLPDictMetrics(batches []pmetric.Metrics, outputDir string) {
+	for i, batch := range batches {
+		// Convert to dictionary-encoded format
+		dictBatch := otlpdict.Convert(batch)
+
+		data, err := proto.Marshal(dictBatch)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error marshaling batch %d: %v\n", i, err)
 			continue

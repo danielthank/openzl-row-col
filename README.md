@@ -23,7 +23,6 @@ g++ --version
 ```bash
 # Clone and setup submodules
 git submodule update --init --recursive
-cd otel-arrow && git submodule update --init --recursive && cd ..
 
 # Build OpenZL
 cd openzl
@@ -44,13 +43,13 @@ cargo build --release
        --input ../testdata/astronomy-otelmetrics.zst \
        --mode metrics \
        --batch-size 10,100,1000 \
-       --format otlp,otap,otapnodict,otapdictperfile
+       --format otlp,otlpmetricsdict,otap,otapnodict,otapdictperfile
    ```
    Options:
    - `--input <FILE>`: Input .zst file
    - `--mode <metrics|traces|dump>`: Data type or dump mode
    - `--batch-size <SIZES>`: Comma-separated batch sizes
-   - `--format <FORMATS>`: otlp, otap, otapnodict, otapdictperfile
+   - `--format <FORMATS>`: otlp, otlpmetricsdict, otap, otapnodict, otapdictperfile
    - `--dump-file <FILE>`: File to dump (for dump mode)
 
 2. **Generate TPC-H data**:
@@ -73,7 +72,7 @@ cargo build --release
    cd scripts && python3 train_compressors.py --schema all && cd ..
    ```
    Options:
-   - `--schema <SCHEMA>`: Schema(s) to train: all, otel, tpch, or specific name (otap, otlp_metrics, otlp_traces, tpch_proto)
+   - `--schema <SCHEMA>`: Schema(s) to train: all, otel, tpch, or specific name (otap, otlp_metrics, otlp_traces, otlpmetricsdict, tpch_proto)
 
 4. **Run benchmarks**:
    ```bash
@@ -82,6 +81,7 @@ cargo build --release
    Options:
    - `--zstd-level <1-22>`: Zstd compression level (default: 7)
    - `--iterations <N>`: Iterations per dataset (default: 3)
+   - `--threads <N>`: Number of parallel threads (default: 8)
    - `--data-dir <PATH>`: Data directory (default: data/generated/)
    - `--compressor-dir <PATH>`: Compressor directory (default: data)
    - `--dataset <all|otel|tpch>`: Filter datasets to benchmark (default: all)
@@ -121,7 +121,6 @@ cargo build --release
 ├── Cargo.toml                      # Workspace root
 ├── README.md                       # This file
 ├── openzl/                         # Submodule (evaluation branch)
-├── otel-arrow/                     # Submodule (main branch)
 ├── crates/
 │   ├── openzl-sys/                 # FFI bindings
 │   ├── openzl/                     # Safe wrapper
@@ -142,7 +141,8 @@ cargo build --release
     ├── generated/                  # Generated benchmark data
     ├── otap/                       # Trained compressors
     ├── otlp_metrics/
-    └── otlp_traces/
+    ├── otlp_traces/
+    └── otlpmetricsdict/
 ```
 
 ## License
