@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -31,11 +32,29 @@ const (
 	OTAPModeDictPerFile                 // New producer per batch
 )
 
+// Metadata contains information about the generated dataset
+type Metadata struct {
+	TotalDataPoints int `json:"total_data_points"`
+	NumPayloads     int `json:"num_payloads"`
+}
+
+func writeMetadata(outputDir string, totalDataPoints, numPayloads int) error {
+	metadata := Metadata{
+		TotalDataPoints: totalDataPoints,
+		NumPayloads:     numPayloads,
+	}
+	data, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(outputDir, "metadata.json"), data, 0644)
+}
+
 func main() {
 	inputFile := flag.String("input", "", "Input .zst file")
 	mode := flag.String("mode", "", "Mode: 'metrics', 'traces', or 'dump'")
 	batchSizeStr := flag.String("batch-size", "", "Comma-separated list of batch sizes")
-	formatStr := flag.String("format", "", "Comma-separated list of formats: 'otlp' and/or 'otap'")
+	formatStr := flag.String("format", "", "Comma-separated list of formats: otlp, otlpmetricsdict, otlptracesdict, otap, otapnodict, otapdictperfile")
 	dumpFile := flag.String("dump-file", "", "File to dump (for dump mode)")
 	flag.Parse()
 
@@ -52,7 +71,8 @@ func main() {
 	if *inputFile == "" || *mode == "" || *batchSizeStr == "" || *formatStr == "" {
 		fmt.Fprintf(os.Stderr, "Usage: %s --input <file.zst> --mode <metrics|traces> --batch-size <sizes> --format <formats>\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "       %s --mode dump --dump-file <file.bin>\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "Example: %s --input testdata/astronomy-oteltraces.zst --mode traces --batch-size 10,100,1000 --format otlp,otap\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Formats: otlp, otlpmetricsdict, otlptracesdict, otap, otapnodict, otapdictperfile\n")
+		fmt.Fprintf(os.Stderr, "Example: %s --input testdata/astronomy-oteltraces.zst --mode traces --batch-size 50000 --format otlp,otlptracesdict,otap\n", os.Args[0])
 		os.Exit(1)
 	}
 
@@ -192,6 +212,11 @@ func processMetrics(inputFile string, batchSizes []int, formats []string) {
 			case "otapdictperfile":
 				writeBatchesOTAPMetrics(batches, outputDir, OTAPModeDictPerFile)
 			}
+
+			// Write metadata
+			if err := writeMetadata(outputDir, totalDataPoints, len(batches)); err != nil {
+				fmt.Fprintf(os.Stderr, "Error writing metadata: %v\n", err)
+			}
 		}
 	}
 }
@@ -287,6 +312,11 @@ func processTraces(inputFile string, batchSizes []int, formats []string) {
 				writeBatchesOTAPTraces(batches, outputDir, OTAPModeNoDict)
 			case "otapdictperfile":
 				writeBatchesOTAPTraces(batches, outputDir, OTAPModeDictPerFile)
+			}
+
+			// Write metadata
+			if err := writeMetadata(outputDir, totalSpans, len(batches)); err != nil {
+				fmt.Fprintf(os.Stderr, "Error writing metadata: %v\n", err)
 			}
 		}
 	}

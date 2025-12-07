@@ -1,7 +1,26 @@
 //! Batch directory and compressor discovery utilities
 
 use anyhow::{Context, Result};
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
+
+/// Metadata for a batch directory (from Go rebatch program)
+#[derive(Debug, Deserialize)]
+pub struct BatchMetadata {
+    pub total_data_points: usize,
+    #[allow(dead_code)]
+    pub num_payloads: usize,
+}
+
+/// Read metadata.json from a batch directory
+pub fn read_metadata(batch_dir: &Path) -> Result<BatchMetadata> {
+    let metadata_path = batch_dir.join("metadata.json");
+    let content = std::fs::read_to_string(&metadata_path)
+        .with_context(|| format!("Failed to read {}", metadata_path.display()))?;
+    let metadata: BatchMetadata = serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse {}", metadata_path.display()))?;
+    Ok(metadata)
+}
 
 /// Discover batch directories containing payload files
 pub fn discover_batch_directories(testdata_dir: &Path) -> Result<Vec<PathBuf>> {
@@ -72,32 +91,36 @@ impl BatchDirInfo {
     /// Get the compressor name to use for this batch
     /// Returns the format for OTAP variants, otlp_metrics/otlp_traces for OTLP,
     /// otlpmetricsdict for dictionary-encoded OTLP metrics, or tpch_proto for TPC-H proto format.
-    /// Returns None for Arrow formats (uses zstd-only, no OpenZL).
+    /// Returns None for zstd-only formats (Arrow, otapnodict, otapdictperfile).
     pub fn compressor_name(&self) -> Option<&str> {
         match self.format.as_str() {
-            // OTel formats (OTAP uses zstd-only, no OpenZL)
+            // OTLP formats
             "otlp" if self.dataset.contains("otelmetrics") => Some("otlp_metrics"),
             "otlp" if self.dataset.contains("oteltraces") => Some("otlp_traces"),
             // OTLP with dictionary-encoded attribute keys
             "otlpmetricsdict" => Some("otlpmetricsdict"),
             "otlptracesdict" => Some("otlptracesdict"),
-            // TPC-H proto format (Arrow uses zstd-only, no OpenZL)
+            // Native OTAP format (with OpenZL)
+            "otap" => Some("otap"),
+            // TPC-H proto format
             "proto" if self.dataset.starts_with("tpch-") => Some("tpch_proto"),
             _ => None,
         }
     }
 
     /// Get the trained compressor file to load
-    /// Returns None for zstd-only formats (OTAP, Arrow).
+    /// Returns None for zstd-only formats (Arrow, otapnodict, otapdictperfile).
     pub fn trained_compressor_name(&self) -> Option<&'static str> {
         match self.format.as_str() {
-            // OTel formats (OTAP uses zstd-only, no OpenZL)
+            // OTLP formats
             "otlp" if self.dataset.contains("otelmetrics") => Some("otlp_metrics"),
             "otlp" if self.dataset.contains("oteltraces") => Some("otlp_traces"),
             // OTLP with dictionary-encoded attribute keys
             "otlpmetricsdict" => Some("otlpmetricsdict"),
             "otlptracesdict" => Some("otlptracesdict"),
-            // TPC-H proto format (Arrow uses zstd-only, no OpenZL)
+            // Native OTAP format (with OpenZL)
+            "otap" => Some("otap"),
+            // TPC-H proto format
             "proto" if self.dataset.starts_with("tpch-") => Some("tpch_proto"),
             _ => None,
         }
@@ -108,9 +131,9 @@ impl BatchDirInfo {
         // Arrow formats for TPC-H
         let is_arrow = matches!(self.format.as_str(), "arrow" | "arrownodict" | "arrowdictperfile")
             && self.dataset.starts_with("tpch-");
-        // OTAP formats for OTel
-        let is_otap = matches!(self.format.as_str(), "otap" | "otapnodict" | "otapdictperfile");
-        is_arrow || is_otap
+        // OTAP variants without native dictionary (zstd-only)
+        let is_otap_variant = matches!(self.format.as_str(), "otapnodict" | "otapdictperfile");
+        is_arrow || is_otap_variant
     }
 
     /// Get the format name for zstd-only benchmarks

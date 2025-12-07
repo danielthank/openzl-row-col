@@ -1,8 +1,8 @@
 [project]
-name = "batch-size-visualization"
+name = "benchmark-scripts"
 version = "0.1.0"
-description = "Visualization tools for batch size compression benchmarks"
-requires-python = "==3.11.*"
+description = "Visualization and analysis scripts for compression benchmarks"
+requires-python = ">=3.11"
 dependencies = [
     "matplotlib>=3.8.0",
     "numpy>=1.26.0",
@@ -10,3 +10,5 @@ dependencies = [
 
 [project.scripts]
 visualize-batch-size = "visualize_batch_size:main"
+paper-plots = "paper_plots:main"
+presentation-plots = "presentation_plots:main"

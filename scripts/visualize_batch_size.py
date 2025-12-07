@@ -154,6 +154,63 @@ def extract_throughput_series(
     return batch_sizes, throughputs, stds
 
 
+def extract_e2e_speed_series(
+    dataset_results: List[Dict], compressor: str, method: str, time_type: str
+) -> Tuple[List[int], List[float]]:
+    """
+    Extract batch sizes and end-to-end speed (raw baseline size / time).
+
+    For OTAP/OTLP variants: uses raw OTLP size as baseline.
+    For Arrow/Proto variants: uses raw Proto size as baseline.
+
+    Args:
+        dataset_results: All results for a dataset
+        compressor: 'otap', 'otlp_metrics', etc.
+        method: 'zstd' or 'openzl'
+        time_type: 'compression' or 'decompression'
+
+    Returns:
+        (batch_sizes, speeds_mbps) sorted by batch size
+    """
+    filtered = [r for r in dataset_results if r["compressor"] == compressor]
+    filtered.sort(key=lambda x: x["batch_size"])
+
+    # Determine baseline type
+    is_tpch = compressor in ("tpch_proto", "arrow", "arrownodict", "arrowdictperfile")
+
+    # Build baseline lookup
+    baseline_by_batch = {}
+    for r in dataset_results:
+        if is_tpch:
+            if r["compressor"] == "tpch_proto":
+                baseline_by_batch[r["batch_size"]] = r["total_uncompressed_bytes"]
+        else:
+            if r["compressor"] in ("otlp_metrics", "otlp_traces"):
+                baseline_by_batch[r["batch_size"]] = r["total_uncompressed_bytes"]
+
+    batch_sizes = []
+    speeds = []
+    for r in filtered:
+        batch_size = r["batch_size"]
+        if batch_size not in baseline_by_batch:
+            # For baseline formats (otlp_metrics, otlp_traces, tpch_proto), use own size
+            if compressor in ("otlp_metrics", "otlp_traces", "tpch_proto"):
+                baseline_bytes = r["total_uncompressed_bytes"]
+            else:
+                continue
+        else:
+            baseline_bytes = baseline_by_batch[batch_size]
+
+        time_ms = r[method][time_type]["avg_ms"]
+        if time_ms > 0:
+            # speed = baseline_bytes / time_ms / 1000 to get MB/s
+            speed_mbps = baseline_bytes / time_ms / 1000
+            batch_sizes.append(batch_size)
+            speeds.append(speed_mbps)
+
+    return batch_sizes, speeds
+
+
 def get_series_configs():
     """
     Return series configurations for plotting time/throughput.
@@ -166,29 +223,28 @@ def get_series_configs():
     - Native (incremental dict): blue
     - nodict: purple
     - dictperfile: cyan
-    Row-based formats use dotted lines, column-based use solid lines.
+    Line style: OpenZL = solid ('-'), others = dotted (':')
     """
     return [
-        # OTel formats - column-based (solid)
-        ("otap", "zstd", "OTAP (delta dict) + zstd", "blue", "^", "-"),
-        ("otapnodict", "zstd", "OTAP (no dict) + zstd", "purple", "^", "-"),
-        ("otapdictperfile", "zstd", "OTAP (dict/batch) + zstd", "cyan", "^", "-"),
-        # OTel formats - row-based (dotted)
-        ("otlp_metrics", "openzl", "OTLP + OpenZL", "red", "s", ":"),
-        ("otlp_metrics", "zstd", "OTLP + zstd", "green", "o", ":"),
-        ("otlp_traces", "openzl", "OTLP + OpenZL", "red", "s", ":"),
-        ("otlp_traces", "zstd", "OTLP + zstd", "green", "o", ":"),
-        ("otlpmetricsdict", "openzl", "OTLP (dict) + OpenZL", "orange", "h", ":"),
-        ("otlpmetricsdict", "zstd", "OTLP (dict) + zstd", "brown", "h", ":"),
-        ("otlptracesdict", "openzl", "OTLP (dict) + OpenZL", "orange", "h", ":"),
-        ("otlptracesdict", "zstd", "OTLP (dict) + zstd", "brown", "h", ":"),
-        # TPC-H formats - column-based (solid)
-        ("arrow", "zstd", "Arrow (delta dict) + zstd", "blue", "p", "-"),
-        ("arrownodict", "zstd", "Arrow (no dict) + zstd", "purple", "p", "-"),
-        ("arrowdictperfile", "zstd", "Arrow (dict/batch) + zstd", "cyan", "p", "-"),
-        # TPC-H formats - row-based (dotted)
-        ("tpch_proto", "openzl", "Proto + OpenZL", "red", "D", ":"),
-        ("tpch_proto", "zstd", "Proto + zstd", "green", "D", ":"),
+        # OpenZL first (solid lines) - appears at top of legend
+        ("otlp_metrics", "openzl", "OTLP + OpenZL", "#d62728", "s", "-"),  # red
+        ("otlp_traces", "openzl", "OTLP + OpenZL", "#d62728", "s", "-"),
+        ("otlpmetricsdict", "openzl", "OTLP (dict) + OpenZL", "#ff7f0e", "h", "-"),  # orange
+        ("otlptracesdict", "openzl", "OTLP (dict) + OpenZL", "#ff7f0e", "h", "-"),
+        ("tpch_proto", "openzl", "Proto + OpenZL", "#d62728", "D", "-"),
+        # zstd (dotted lines)
+        ("otlp_metrics", "zstd", "OTLP + zstd", "#2ca02c", "o", ":"),  # green
+        ("otlp_traces", "zstd", "OTLP + zstd", "#2ca02c", "o", ":"),
+        ("otlpmetricsdict", "zstd", "OTLP (dict) + zstd", "#8c564b", "h", ":"),  # brown
+        ("otlptracesdict", "zstd", "OTLP (dict) + zstd", "#8c564b", "h", ":"),
+        ("tpch_proto", "zstd", "Proto + zstd", "#2ca02c", "D", ":"),
+        # Column formats (dotted for zstd)
+        ("otap", "zstd", "OTAP (delta dict) + zstd", "#1f77b4", "^", ":"),  # blue
+        ("otapnodict", "zstd", "OTAP (no dict) + zstd", "#9467bd", "v", ":"),  # purple
+        ("otapdictperfile", "zstd", "OTAP (dict/batch) + zstd", "#17becf", ">", ":"),  # cyan
+        ("arrow", "zstd", "Arrow (delta dict) + zstd", "#1f77b4", "p", ":"),
+        ("arrownodict", "zstd", "Arrow (no dict) + zstd", "#9467bd", "P", ":"),
+        ("arrowdictperfile", "zstd", "Arrow (dict/batch) + zstd", "#17becf", "*", ":"),
     ]
 
 
@@ -205,29 +261,28 @@ def get_compression_ratio_series_configs():
     - Native (incremental dict): blue
     - nodict: purple
     - dictperfile: cyan
-    Row-based formats use dotted lines, column-based use solid lines.
+    Line style: OpenZL = solid ('-'), others = dotted (':')
     """
     return [
-        # OTel formats - column-based (solid)
-        ("otap", "zstd", "OTAP (delta dict) + zstd", "blue", "^", "-"),
-        ("otapnodict", "zstd", "OTAP (no dict) + zstd", "purple", "^", "-"),
-        ("otapdictperfile", "zstd", "OTAP (dict/batch) + zstd", "cyan", "^", "-"),
-        # OTel formats - row-based (dotted)
-        ("otlp_metrics", "openzl", "OTLP + OpenZL", "red", "s", ":"),
-        ("otlp_metrics", "zstd", "OTLP + zstd", "green", "o", ":"),
-        ("otlp_traces", "openzl", "OTLP + OpenZL", "red", "s", ":"),
-        ("otlp_traces", "zstd", "OTLP + zstd", "green", "o", ":"),
-        ("otlpmetricsdict", "openzl", "OTLP (dict) + OpenZL", "orange", "h", ":"),
-        ("otlpmetricsdict", "zstd", "OTLP (dict) + zstd", "brown", "h", ":"),
-        ("otlptracesdict", "openzl", "OTLP (dict) + OpenZL", "orange", "h", ":"),
-        ("otlptracesdict", "zstd", "OTLP (dict) + zstd", "brown", "h", ":"),
-        # TPC-H formats - column-based (solid)
-        ("arrow", "zstd", "Arrow (delta dict) + zstd", "blue", "p", "-"),
-        ("arrownodict", "zstd", "Arrow (no dict) + zstd", "purple", "p", "-"),
-        ("arrowdictperfile", "zstd", "Arrow (dict/batch) + zstd", "cyan", "p", "-"),
-        # TPC-H formats - row-based (dotted)
-        ("tpch_proto", "openzl", "Proto + OpenZL", "red", "D", ":"),
-        ("tpch_proto", "zstd", "Proto + zstd", "green", "D", ":"),
+        # OpenZL first (solid lines) - appears at top of legend
+        ("otlp_metrics", "openzl", "OTLP + OpenZL", "#d62728", "s", "-"),  # red
+        ("otlp_traces", "openzl", "OTLP + OpenZL", "#d62728", "s", "-"),
+        ("otlpmetricsdict", "openzl", "OTLP (dict) + OpenZL", "#ff7f0e", "h", "-"),  # orange
+        ("otlptracesdict", "openzl", "OTLP (dict) + OpenZL", "#ff7f0e", "h", "-"),
+        ("tpch_proto", "openzl", "Proto + OpenZL", "#d62728", "D", "-"),
+        # zstd (dotted lines)
+        ("otlp_metrics", "zstd", "OTLP + zstd", "#2ca02c", "o", ":"),  # green
+        ("otlp_traces", "zstd", "OTLP + zstd", "#2ca02c", "o", ":"),
+        ("otlpmetricsdict", "zstd", "OTLP (dict) + zstd", "#8c564b", "h", ":"),  # brown
+        ("otlptracesdict", "zstd", "OTLP (dict) + zstd", "#8c564b", "h", ":"),
+        ("tpch_proto", "zstd", "Proto + zstd", "#2ca02c", "D", ":"),
+        # Column formats (dotted for zstd)
+        ("otap", "zstd", "OTAP (delta dict) + zstd", "#1f77b4", "^", ":"),  # blue
+        ("otapnodict", "zstd", "OTAP (no dict) + zstd", "#9467bd", "v", ":"),  # purple
+        ("otapdictperfile", "zstd", "OTAP (dict/batch) + zstd", "#17becf", ">", ":"),  # cyan
+        ("arrow", "zstd", "Arrow (delta dict) + zstd", "#1f77b4", "p", ":"),
+        ("arrownodict", "zstd", "Arrow (no dict) + zstd", "#9467bd", "P", ":"),
+        ("arrowdictperfile", "zstd", "Arrow (dict/batch) + zstd", "#17becf", "*", ":"),
     ]
 
 
@@ -312,6 +367,48 @@ def plot_time(
     print(f"Saved: {output_file}")
 
 
+def plot_speed(
+    dataset_name: str,
+    dataset_results: List[Dict],
+    output_dir: Path,
+    time_type: str,
+):
+    """Create compression/decompression speed vs batch size plot."""
+    _, ax = plt.subplots(figsize=(10, 6))
+
+    for compressor, method, label, color, marker, linestyle in get_series_configs():
+        batch_sizes, speeds = extract_e2e_speed_series(
+            dataset_results, compressor, method, time_type
+        )
+        if batch_sizes:
+            ax.plot(
+                batch_sizes,
+                speeds,
+                label=label,
+                color=color,
+                marker=marker,
+                linestyle=linestyle,
+                linewidth=2,
+                markersize=8,
+            )
+
+    ax.set_xlabel("Batch Size", fontsize=12)
+    ax.set_ylabel(f"{time_type.capitalize()} Speed (MB/s, vs raw baseline)", fontsize=12)
+    ax.set_title(
+        f"{dataset_name} - {time_type.capitalize()} Speed vs Batch Size", fontsize=14
+    )
+    ax.set_xscale("log")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best", fontsize=10, handlelength=3)
+
+    output_file = output_dir / f"{dataset_name}_{time_type}_speed.png"
+    plt.tight_layout()
+    plt.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print(f"Saved: {output_file}")
+
+
 def plot_throughput(
     dataset_name: str,
     dataset_results: List[Dict],
@@ -362,6 +459,8 @@ def plot_dataset(dataset_name: str, dataset_results: List[Dict], output_dir: Pat
     plot_compression_ratio(dataset_name, dataset_results, output_dir)
     plot_time(dataset_name, dataset_results, output_dir, "compression")
     plot_time(dataset_name, dataset_results, output_dir, "decompression")
+    plot_speed(dataset_name, dataset_results, output_dir, "compression")
+    plot_speed(dataset_name, dataset_results, output_dir, "decompression")
     plot_throughput(dataset_name, dataset_results, output_dir, "compression")
     plot_throughput(dataset_name, dataset_results, output_dir, "decompression")
 

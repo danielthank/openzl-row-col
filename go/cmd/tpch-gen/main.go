@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/csv"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -18,6 +19,24 @@ import (
 	"github.com/danielthank/15712/go/pkg/tpch"
 	"google.golang.org/protobuf/proto"
 )
+
+// Metadata contains information about the generated dataset
+type Metadata struct {
+	TotalDataPoints int `json:"total_data_points"`
+	NumPayloads     int `json:"num_payloads"`
+}
+
+func writeMetadata(outputDir string, totalDataPoints, numPayloads int) error {
+	metadata := Metadata{
+		TotalDataPoints: totalDataPoints,
+		NumPayloads:     numPayloads,
+	}
+	data, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(outputDir, "metadata.json"), data, 0644)
+}
 
 func main() {
 	tablesStr := flag.String("tables", "lineitem,orders", "Comma-separated list of tables")
@@ -188,6 +207,11 @@ func processLineItem(tblFile, outDir string, batchSize int, format string) {
 		batchNum++
 	}
 
+	// Write metadata
+	if err := writeMetadata(outDir, rowCount, batchNum); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing metadata: %v\n", err)
+	}
+
 	fmt.Printf("    Wrote %d batches (%d rows)\n", batchNum, rowCount)
 }
 
@@ -256,6 +280,11 @@ func processLineItemArrow(tblFile, outDir string, batchSize int, format string) 
 			fmt.Fprintf(os.Stderr, "Error writing file: %v\n", err)
 		}
 		batchNum++
+	}
+
+	// Write metadata
+	if err := writeMetadata(outDir, len(allItems), batchNum); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing metadata: %v\n", err)
 	}
 
 	modeStr := "incremental dictionaries"
@@ -380,6 +409,11 @@ func processOrders(tblFile, outDir string, batchSize int, format string) {
 		batchNum++
 	}
 
+	// Write metadata
+	if err := writeMetadata(outDir, rowCount, batchNum); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing metadata: %v\n", err)
+	}
+
 	fmt.Printf("    Wrote %d batches (%d rows)\n", batchNum, rowCount)
 }
 
@@ -448,6 +482,11 @@ func processOrdersArrow(tblFile, outDir string, batchSize int, format string) {
 			fmt.Fprintf(os.Stderr, "Error writing file: %v\n", err)
 		}
 		batchNum++
+	}
+
+	// Write metadata
+	if err := writeMetadata(outDir, len(allOrders), batchNum); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing metadata: %v\n", err)
 	}
 
 	modeStr := "incremental dictionaries"

@@ -16,7 +16,8 @@ use std::fs::File;
 use std::path::PathBuf;
 
 use crate::discovery::{
-    discover_batch_directories, discover_compressors, parse_batch_dir_name, read_payloads,
+    discover_batch_directories, discover_compressors, parse_batch_dir_name, read_metadata,
+    read_payloads,
 };
 use crate::openzl::OpenZLBenchmark;
 use crate::stats::TimingStats;
@@ -28,7 +29,7 @@ use crate::zstd::ZstdBenchmark;
 #[command(about = "Benchmark OpenZL compression on OpenTelemetry data")]
 struct Args {
     /// Zstd compression level (1-22)
-    #[arg(long, default_value = "7")]
+    #[arg(long, default_value = "9")]
     zstd_level: i32,
 
     /// Number of iterations to run entire dataset
@@ -84,6 +85,7 @@ struct BenchmarkResult {
     batch_size: usize,
     compressor: String,
     num_payloads: usize,
+    total_data_points: usize,
     iterations: usize,
     total_uncompressed_bytes: usize,
     zstd_level: i32,
@@ -325,6 +327,10 @@ fn run_benchmark(
     let compressor_bytes =
         std::fs::read(compressor_path).context("Failed to load compressor")?;
 
+    // Read metadata for data point count
+    let metadata = read_metadata(batch_dir)?;
+    let total_data_points = metadata.total_data_points;
+
     // Read all payloads
     let payloads = read_payloads(batch_dir)?;
     let num_payloads = payloads.len();
@@ -354,6 +360,7 @@ fn run_benchmark(
         batch_size,
         compressor: compressor_name.to_string(),
         num_payloads,
+        total_data_points,
         iterations,
         total_uncompressed_bytes,
         zstd_level,
@@ -395,6 +402,10 @@ fn run_zstd_only_benchmark(
     let dataset = &batch_info.dataset;
     let batch_size = batch_info.batch_size;
 
+    // Read metadata for data point count
+    let metadata = read_metadata(batch_dir)?;
+    let total_data_points = metadata.total_data_points;
+
     // Read all payloads
     let payloads = read_payloads(batch_dir)?;
     let num_payloads = payloads.len();
@@ -417,6 +428,7 @@ fn run_zstd_only_benchmark(
         batch_size,
         compressor: compressor_name.to_string(),
         num_payloads,
+        total_data_points,
         iterations,
         total_uncompressed_bytes,
         zstd_level,
