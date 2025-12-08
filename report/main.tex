@@ -6,6 +6,7 @@
 \usepackage{multirow}
 \usepackage{fvextra}
 \usepackage{forest}
+\usepackage{float}
 
 \title[Format-Aware Compression]{Format-Aware Compression for Telemetry Data Transport: 
 Can Schema-Driven Optimization Match Native Columnar Protocols?}
@@ -31,14 +32,15 @@ Can Schema-Driven Optimization Match Native Columnar Protocols?}
 \begin{document}
 
 \begin{abstract}
-High-volume telemetry systems face a fundamental trade-off between data transport efficiency and protocol complexity. While columnar protocols like OTel Arrow (OTAP) achieve superior compression through data reorganization, they require substantial protocol migration efforts. This paper investigates whether format-aware compression frameworks can obviate the need for such migrations by achieving comparable compression ratios on existing row-oriented protocols. We evaluate OpenZL, a general-purpose schema-driven compression framework, against the specialized OTAP protocol across five real-world workloads with varying batch sizes. Our results demonstrate that OpenZL applied to row-oriented OTLP achieves compression ratios around 20-50\% of OTAP for large batches (1000+ data points). However, OpenZL exhibits significant computational overhead at small batch sizes, making traditional zstd more practical for such scenarios. These findings suggest that format-aware compression can serve as a viable alternative to protocol migration for batch-oriented telemetry systems, while highlighting the continued importance of columnar formats for maximum efficiency.
+
+This paper investigates whether format-aware compression can match columnar protocols without requiring protocol migration. We evaluate OpenZL, a schema-driven compression framework, against OTel Arrow (OTAP) across five workloads. For telemetry data, OpenZL achieves 45--91\% of OTAP's compression ratio but cannot fully close the gap. Through an ablation study, we find that OTAP's sorting optimization is the key differentiator: when disabled, OpenZL outperforms OTAP in three of four workloads. However, for non-telemetry workloads like TPC-H, OpenZL performs competitively with Arrow, making it a viable alternative when domain-specific optimizations are not in play.
 \end{abstract}
 
 \maketitle
 
 \section{Introduction}
 
-Modern distributed systems generate telemetry data (metrics, traces, and logs at unprecedented scales. A typical large-scale enterprise deployment may produce terabytes of observability data daily, consuming significant network bandwidth and storage resources. The OpenTelemetry (OTel) project has emerged as the industry standard for telemetry data collection, initially using the OpenTelemetry Protocol (OTLP), a row-oriented protocol based on Protocol Buffers and gRPC.
+Modern distributed systems generate telemetry data (metrics, traces, and logs) at unprecedented scales. A typical large-scale enterprise deployment may produce terabytes of observability data daily, consuming significant network bandwidth and storage resources. The OpenTelemetry (OTel) project has emerged as the industry standard for telemetry data collection, initially using the OpenTelemetry Protocol (OTLP), a row-oriented protocol based on Protocol Buffers and gRPC.
 
 To address the growing data volumes, the OpenTelemetry community developed OTel Arrow (OTAP), a columnar transport protocol built on Apache Arrow that achieves significantly better compression ratios than OTLP. However, adopting OTAP requires substantial engineering effort: protocol stack changes, client-server compatibility concerns, and modifications to existing infrastructure. This raises a fundamental question: \textit{Is protocol migration necessary, or can sophisticated compression alone bridge the efficiency gap?}
 
@@ -46,10 +48,11 @@ This paper investigates whether OpenZL, a format-aware compression framework tha
 
 Our key contributions are:
 \begin{itemize}
-    \item A comprehensive evaluation of format-aware compression (OpenZL) on row oreinted transport protocol versus standard compression on native columnar protocols (OTAP) across five  workloads.
-    \item Detailed analysis of the performance trade-offs across varying batch sizes.
+    \item A comprehensive evaluation of format-aware compression (OpenZL) on row-oriented transport protocol versus standard compression on native columnar protocols (OTAP) across five workloads.
+    \item An ablation study decomposing OTAP's compression advantage into its constituent optimizations (sorting, delta dictionary, columnar deduplication).
     \item Practical guidance on when format-aware compression can substitute for protocol migration versus when columnar protocols remain essential.
 \end{itemize}
+Our evaluation framework, including benchmark tools and data generation scripts, is open source \cite{eval-repo}.
 
 \section{Motivation}
 
@@ -83,13 +86,11 @@ OTLP is the standard row-oriented protocol for transmitting OpenTelemetry data. 
 
 \subsubsection{Protocol Buffers and gRPC}
 
-Protocol Buffers is a language-neutral, platform-neutral mechanism for serializing structured data. It defines schemas in a domain-specific language that specifies message types, fields, and data types. The protobuf compiler generates code for serializing and deserializing messages in various programming languages.gRPC is a high-performance RPC framework that uses HTTP/2 for transport and Protocol Buffers as its interface definition language. 
+Protocol Buffers is a language-neutral, platform-neutral mechanism for serializing structured data. It defines schemas in a domain-specific language that specifies message types, fields, and data types. The protobuf compiler generates code for serializing and deserializing messages in various programming languages. gRPC is a high-performance RPC framework that uses HTTP/2 for transport and Protocol Buffers as its interface definition language. 
 
 \subsubsection{OTLP Data Structure}
 
-OTLP organizes telemetry data hierarchically:
-\\ 
-\textbf{For Metrics:}
+OTLP organizes telemetry data hierarchically. For metrics:
 \begin{verbatim}
 ExportMetricsServiceRequest
 |-- ResourceMetrics[]
@@ -105,7 +106,7 @@ ExportMetricsServiceRequest
                 +-- Attributes[]
 \end{verbatim}
 
-\textbf{For Traces:}
+For traces:
 \begin{verbatim}
 ExportTraceServiceRequest
 |-- ResourceSpans[]
@@ -122,7 +123,7 @@ ExportTraceServiceRequest
             +-- Links[]
 \end{verbatim}
 
-The \textbf{batch size} in our experiments refers to the number of leaf-level data points in a single payload: the number of metric DataPoints for metrics workloads, or the number of Spans for trace workloads, and the number of rows for TPC-H.
+The batch size in our experiments refers to the number of leaf-level data points in a single payload: the number of metric DataPoints for metrics workloads, or the number of Spans for trace workloads, and the number of rows for TPC-H.
 
 \subsubsection{OTLP Compression Pipeline}
 
@@ -140,7 +141,7 @@ The standard OTLP compression pipeline consists of:
 
 \subsection{OTel Arrow (OTAP)}
 
-OTel Arrow represents a fundamental redesign of the transport protocol using columnar organization.
+OTel Arrow represents a fundamental redesign of the transport protocol using columnar organization. This section describes both the data format and three key optimizations that contribute to OTAP's compression efficiency: delta dictionary, sorting, and columnar deduplication.
 
 \subsubsection{Apache Arrow and IPC Format}
 
@@ -164,42 +165,47 @@ Instead of storing data row-by-row, Arrow organizes data in columns, enabling:
     \item \textbf{Compression efficiency:} Similar values grouped together compress better
 \end{itemize}
 
+\subsubsection{Data Organization}
 
-
-\subsubsection{OTAP Data Organization}
-
-OTAP transforms OTLP's nested row-oriented structure into a flat columnar layout. For example, metric data becomes:
+OTAP transforms OTLP's nested row-oriented structure into multiple related columnar tables (star schema). For metrics:
 
 \begin{verbatim}
-Metric Table (columnar)
-|- resource_id: [0,0,1,1,2,2,...]
-|- metric_name: [cpu,mem,cpu,mem,...]
-|- timestamp: [t1,t2,t3,t4,...]
-|- value: [0.5,8.2,0.6,7.9,...]
-+- attributes: [dict_ref,dict_ref,...]
+Metrics Table (main):
+|- id, resource, scope, metric_type
+|- name, description, unit (dict encoded)
++- aggregation_temporality, is_monotonic
+
+DataPoints Table (related):
+|- parent_id -> Metrics.id
+|- timestamp, value, flags
++- attributes (dict refs)
 \end{verbatim}
 
-Each column stores only values for a single field, enabling specialized compression and efficient access patterns.
+Each column stores values for a single field. String columns use dictionary encoding, replacing repeated values with compact integer references.
 
-\subsubsection{Dictionary Encoding in OTAP}
+\subsubsection{Optimization: Delta Dictionary}
 
-Dictionary encoding is crucial to OTAP's compression efficiency. Instead of repeating string values (like metric names or attribute keys), OTAP:
+OTAP uses delta dictionary encoding to efficiently transmit string values across batches. Instead of sending complete dictionaries with each batch, OTAP maintains a stateful dictionary across the connection: only new strings are transmitted as deltas. For example, if the first batch contains metric names \texttt{["cpu", "mem"]}, these are assigned IDs 0 and 1. When a subsequent batch uses the same metric names, it references IDs 0 and 1 without retransmitting the strings.
 
-\begin{enumerate}
-    \item Assigns each unique string an integer ID
-    \item Transmits the dictionary (string → ID mapping)
-    \item Replaces string values with compact integer references
-\end{enumerate}
+\subsubsection{Optimization: Sorting}
 
-OTAP supports three dictionary modes:
+OTAP sorts rows based on column values to improve compression. Consider unsorted data:
+\begin{verbatim}
+resource: [B, A, B, A]
+metric: [cpu, mem, mem, cpu]
+\end{verbatim}
+After sorting by resource, then metric:
+\begin{verbatim}
+resource: [A, A, B, B]
+metric: [cpu, mem, cpu, mem]
+\end{verbatim}
+The sorted columns have longer runs of identical values, enabling more effective run-length encoding and delta compression.
 
-\begin{itemize}
-    \item \textbf{Stateful (Delta Dictionary):} Dictionary is maintained across batches. Only new entries (deltas) are transmitted. Most efficient for stable schemas.
-    \item \textbf{Dictionary per Batch:} Each batch includes its own complete dictionary. Provides self-contained batches at the cost of redundant dictionary transmission.
-    \item \textbf{No Dictionary:} Strings are transmitted directly. Essentially disables one of OTAP's key compression mechanisms.
-\end{itemize}
+Sorting is straightforward in columnar formats because data is already flattened into tables. In OTLP's nested structure (Resource $\rightarrow$ Scope $\rightarrow$ Metric $\rightarrow$ DataPoints), reordering data points would break hierarchical groupings or require duplicating parent metadata.
 
-Our experiments show that dictionary encoding is fundamental to OTAP's compression advantage, i.e., without it, OTAP can actually perform worse than OTLP with standard compression.
+\subsubsection{Optimization: Columnar Deduplication}
+
+OTAP deduplicates resource and scope metadata across consecutive data points. When a new data point arrives, OTAP checks if its resource/scope matches the previous one. If so, it reuses the existing reference; otherwise, it stores new metadata. This reduces redundancy for workloads where many consecutive data points share common resources.
 
 % PLACEHOLDER: Figure 2
 % Caption: "Comparison of row-oriented (OTLP) versus columnar (OTAP) data organization"
@@ -216,10 +222,10 @@ OpenZL's training process consists of:
 
 \begin{enumerate}
     \item \textbf{Parser Implementation:} Developers implement a parser that extracts structured data from the serialized format. For OTLP, this involves parsing protobuf messages according to the OTel schema.
-    
-    \item \textbf{Training Data Collection:} Sample payloads from the target workload are collected. These samples must be representative but are excluded from evaluation to prevent overfitting.
-    
-    \item \textbf{Training:} OpenZL trains the compressor using our samples specifying encoding strategies for each field.
+
+    \item \textbf{Training Data Collection:} Sample payloads from the target workload are collected. These samples must be representative and are strictly separated from evaluation data to prevent overfitting.
+
+    \item \textbf{Training:} OpenZL analyzes the training samples and generates encoding strategies for each field, producing a trained compressor file.
 \end{enumerate}
 
 \subsubsection{OpenZL Integration for OTLP}
@@ -237,9 +243,9 @@ We evaluate compression systems using three primary metrics:
 \begin{itemize}
     \item \textbf{Compression Ratio:} $CR = \frac{\text{Original Size}}{\text{Compressed Size}}$. Higher is better. We also report bytes per data point for interpretability.
     
-    \item \textbf{Compression Time:} Time required to compress a payload. Critical for high-throughput telemetry systems where compression occurs on the hot path.
-    
-    \item \textbf{Decompression Time:} Time required to decompress. Important for query-time performance.
+    \item \textbf{Compression Speed:} Throughput of compression in MB/s. Critical for high-throughput telemetry systems where compression occurs on the hot path.
+
+    \item \textbf{Decompression Speed:} Throughput of decompression in MB/s. Important for query-time performance.
 \end{itemize}
 
 \section{Research Goals and Hypotheses}
@@ -250,21 +256,13 @@ Determine whether format-aware compression (OpenZL) applied to row-oriented prot
 
 \subsection{Experimental Hypotheses}
 
-We test four specific hypotheses:
+We test three specific hypotheses:
 
-\begin{description}
-    \item[H1: OpenZL improves row-oriented compression] OpenZL should achieve better compression ratios than standard zstd when applied to OTLP.
-    
-    \textbf{Expectation:} OTLP+OpenZL compression ratio $>$ OTLP+zstd compression ratio
-    
-    \item[H2: Columnar format aids compression] Even with identical compression algorithms, columnar organization should improve compression ratios.
-    
-    \textbf{Expectation:} OTAP+zstd compression ratio $>$ OTLP+zstd compression ratio
-    
-    \item[H3: Format-aware compression bridges the gap] Most critically, format-aware compression should enable row-oriented protocols to approach columnar protocol efficiency.
-    
-    \textbf{Expectation:} OTLP+OpenZL compression ratio $\approx$ OTAP+zstd compression ratio
-\end{description}
+(H1) OpenZL improves row-oriented compression: OpenZL should achieve better compression ratios than standard zstd when applied to OTLP. Expectation: OTLP+OpenZL compression ratio $>$ OTLP+zstd compression ratio.
+
+(H2) Columnar format aids compression: Even with identical compression algorithms, columnar organization should improve compression ratios. Expectation: OTAP+zstd compression ratio $>$ OTLP+zstd compression ratio.
+
+(H3) Format-aware compression bridges the gap: Most critically, format-aware compression should enable row-oriented protocols to approach columnar protocol efficiency. Expectation: OTLP+OpenZL compression ratio $\approx$ OTAP+zstd compression ratio.
 
 If H3 holds, it would suggest that organizations can achieve near-columnar compression without protocol migration by adopting format-aware compression.
 
@@ -273,9 +271,10 @@ If H3 holds, it would suggest that organizations can achieve near-columnar compr
 Beyond compression ratios, we investigate:
 
 \begin{itemize}
-    \item \textbf{Compression and decompression times:} Whether OpenZL's training-based approach introduces prohibitive compression or decompression latency
+    \item \textbf{Compression and decompression speeds:} Whether OpenZL's training-based approach introduces prohibitive compression or decompression latency
     \item \textbf{Batch size sensitivity:} How compression performance varies with payload size (critical for understanding deployment scenarios)
     \item \textbf{Workload generalization:} Whether OpenZL's benefits extend to other structured data workloads beyond telemetry. To evaluate this, we repeat all experiments on the TPC-H benchmark, a standard database workload with different data characteristics.
+    \item \textbf{Understanding OTAP's advantage:} What specific optimizations in OTAP contribute most to its compression efficiency, and under what conditions can format-aware compression match or exceed OTAP variants with specific optimizations disabled.
 \end{itemize}
 
 \section{Methodology}
@@ -292,7 +291,7 @@ We evaluate three protocol-compressor combinations:
     \item \textbf{OTAP + zstd:} Columnar protocol with standard compression
 \end{enumerate}
 
-For OTAP, we additionally evaluate the three dictionary encoding strategies, and also implement dictionary per batch for OTLP.
+For OTAP, we additionally evaluate ablation variants with individual optimizations disabled (sorting, delta dictionary, columnar deduplication, and dictionary encoding).
 
 \subsubsection{Batch Size Variation}
 
@@ -302,29 +301,31 @@ To understand how compression scales with payload size, we vary batch sizes from
 We selected four OpenTelemetry workloads, and a TPC-H benchmark to ensure generalizability.
 
 \begin{enumerate}
-    \item \textbf{astronomy\_metrics:} Metrics from astronomical observation systems. Characterized by periodic sensor readings with stable schemas.
-    
-    \item \textbf{astronomy\_traces:} Distributed traces from astronomy data processing pipelines. Features long-running spans with complex attribute sets.
-    
-    \item \textbf{hipstershop\_metrics:} Metrics from the OpenTelemetry demo application (a microservices e-commerce system). Represents typical cloud-native application metrics.
-    
-    \item \textbf{hipstershop\_traces:} Traces from the same demo application.
-    
-    \item \textbf{TPC-H:} Our evaluation focuses on the \texttt{LineItem} table, the schema's largest relation, which represents the granular details of individual orders and constitutes the bulk of the benchmark's data volume.
+    \item \textbf{Astronomy Metrics:} Metrics from astronomical observation systems. Characterized by periodic sensor readings with stable schemas.
+
+    \item \textbf{Astronomy Traces:} Distributed traces from astronomy data processing pipelines. Features long-running spans with complex attribute sets.
+
+    \item \textbf{Hipstershop Metrics:} Metrics from the OpenTelemetry demo application (a microservices e-commerce system). Represents typical cloud-native application metrics.
+
+    \item \textbf{Hipstershop Traces:} Traces from the same demo application.
+
+    \item \textbf{TPC-H LineItem:} The largest relation in the TPC-H schema, representing granular details of individual orders. Unlike the nested hierarchical structure of OTel data, TPC-H has a flat schema with no nested messages. Included to test generalizability beyond telemetry data.
 \end{enumerate}
 
 \subsection{Data Collection and Transformation}
 
 \subsubsection{OTLP Data Preparation}
 
-For each workload, we sourced raw telemetry data in OTLP format and split it into training and test sets. We then generated payloads of varying batch sizes and serialized them to protobuf format.
+For each workload, we sourced raw telemetry data in OTLP format and split it into training (10\%) and test (90\%) sets using random sampling at the data point level. This ensures proper separation between training and evaluation data while maintaining representative samples from each workload. For testing, we generated payloads of varying batch sizes (10 to 50,000 data points) and serialized them to protobuf format.
 
-\subsubsection{OTAP Transformation}
+\subsubsection{Data Generation Tools}
 
-OTLP payloads are transformed to OTAP using the STEF (Structured Telemetry Export Format) transformer. This process parses OTLP protobuf messages, extracts all data points into flat tables, applies dictionary encoding to categorical fields, and serializes the result to Arrow IPC streaming format. This transformation preserves all data while reorganizing it from a row-oriented to a columnar layout.
+We developed two tools for generating test payloads (available at \cite{eval-repo}). The rebatch tool (for OTel workloads) reads raw telemetry data from zstd-compressed OTLP files, rebatches data points into specified batch sizes, and outputs in multiple formats. For OTLP output, it serializes using the standard protobuf marshaler. For OTAP output, it uses the official otel-arrow library's Producer, which converts OTLP data structures to Arrow columnar format with dictionary encoding, sorting, and columnar deduplication. The tool also supports ablation variants that disable individual optimizations.
+
+The tpch-gen tool (for TPC-H workload) reads TPC-H .tbl files (pipe-delimited CSV) and generates batches in both protobuf and Arrow IPC formats. For Arrow output, it builds records with dictionary encoding on low-cardinality string columns and supports incremental dictionary deltas across batches.
 
 \subsection{OpenZL Training}
-For each workload, we implemented OTLP parser variants for metrics and traces, and trained OpenZL compressors on the training samples. Training was performed once per workload type (metrics vs. traces) and reused across batch sizes.
+For each workload, we implemented OTLP parser variants for metrics and traces, and trained OpenZL compressors on the training data. Training payloads were generated at batch size 1000 from the 10\% training split, providing sufficient data point diversity while maintaining reasonable payload sizes. Training was performed once per gRPC schema and the resulting compressors were reused across all batch sizes during evaluation.
 
 \subsection{Evaluation Procedure}
 
@@ -350,31 +351,31 @@ We measured comporession ratios, compression speed and decompression speed.
 & Bytes & Ratio & By/pt & Bytes & Ratio & By/pt & Bytes & Ratio & By/pt \\
 \midrule
 \multicolumn{10}{l}{\textit{Hipstershop Metrics}} \\
-OTLP (Proto) & 37.17M & 1.00 & 556.3 & 464.9K & 79.94 & 7.0 & 375.7K & 98.94 & 5.6 \\
-OTAP (Arrow) & 5.71M & 6.50 & 85.5 & 220.9K & 168.29 & 3.3 & 221.3K & 167.91 & 3.3 \\
+OTLP (Proto) & 33.37M & 1.00 & 556.0 & 469.8K & 71.03 & 7.8 & 468.4K & 71.25 & 7.8 \\
+OTAP (Arrow) & 5.14M & 6.49 & 85.7 & 209.2K & 159.51 & 3.5 & -- & -- & -- \\
 \midrule
 \multicolumn{10}{l}{\textit{Hipstershop Traces}} \\
-OTLP (Proto) & 88.98M & 1.00 & 1027.6 & 2.89M & 30.80 & 33.4 & 2.74M & 32.47 & 31.7 \\
-OTAP (Arrow) & 8.83M & 10.08 & 102.0 & 1.78M & 50.01 & 20.5 & 1.77M & 50.15 & 20.5 \\
+OTLP (Proto) & 80.13M & 1.00 & 1027.7 & 2.64M & 30.39 & 33.8 & 2.51M & 31.97 & 32.1 \\
+OTAP (Arrow) & 7.96M & 10.06 & 102.1 & 1.64M & 48.86 & 21.0 & -- & -- & -- \\
 \midrule
 \multicolumn{10}{l}{\textit{Astronomy Metrics}} \\
-OTLP (Proto) & 299.65M & 1.00 & 380.9 & 6.26M & 47.87 & 8.0 & 4.49M & 66.78 & 5.7 \\
-OTAP (Arrow) & 64.79M & 4.62 & 82.4 & 3.31M & 90.66 & 4.2 & 3.26M & 91.92 & 4.1 \\
+OTLP (Proto) & 269.91M & 1.00 & 380.3 & 6.08M & 44.39 & 8.6 & 4.99M & 54.13 & 7.0 \\
+OTAP (Arrow) & 58.57M & 4.61 & 82.5 & 3.10M & 87.06 & 4.4 & -- & -- & -- \\
 \midrule
 \multicolumn{10}{l}{\textit{Astronomy Traces}} \\
-OTLP (Proto) & 62.84M & 1.00 & 979.6 & 2.95M & 21.27 & 46.1 & 2.54M & 24.70 & 39.7 \\
-OTAP (Arrow) & 13.63M & 4.61 & 212.4 & 2.23M & 28.19 & 34.7 & 2.23M & 28.12 & 34.8 \\
+OTLP (Proto) & 56.71M & 1.00 & 979.5 & 2.72M & 20.83 & 47.0 & 2.36M & 24.07 & 40.7 \\
+OTAP (Arrow) & 12.33M & 4.60 & 213.0 & 2.14M & 26.55 & 36.9 & -- & -- & -- \\
 \midrule
 \multicolumn{10}{l}{\textit{TPC-H LineItem}} \\
-Proto & 84.56M & 1.00 & 140.8 & 22.72M & 3.72 & 37.8 & 17.86M & 4.73 & 29.7 \\
-Arrow & 82.01M & 1.03 & 136.5 & 18.93M & 4.47 & 31.5 & -- & -- & -- \\
+Proto & 76.12M & 1.00 & 140.8 & 20.45M & 3.72 & 37.8 & 15.54M & 4.90 & 28.7 \\
+Arrow & 73.80M & 1.03 & 136.5 & 17.03M & 4.47 & 31.5 & -- & -- & -- \\
 \bottomrule
 \end{tabular}
 \end{table*}
 
 \section{Evaluation Results}
 
-The analysis in this section is based on the compression performance metrics presented in Table~\ref{tab:compression-results} and the batch size variations shown in Figures~\ref{fig:compression-ratio}, \ref{fig:compression-time}, and~\ref{fig:decompression-time}.
+The analysis in this section is based on the compression performance metrics presented in Table~\ref{tab:compression-results} and the batch size variations shown in Figures~\ref{fig:compression-ratio}, \ref{fig:compression-speed}, and~\ref{fig:decompression-speed}.
 
 \subsection{Overall Compression Performance}
 
@@ -382,59 +383,63 @@ The analysis in this section is based on the compression performance metrics pre
 % Caption: "Compression ratio vs. batch size across all workloads for zstd level 4"
 % Description: Multi-line graph with batch size on x-axis (log scale), compression ratio on y-axis. Lines for OTLP+zstd, OTLP+OpenZL, OTAP+zstd (delta dict), OTAP+OpenZL. Show all 5 workloads as subplots.
 
+We evaluate our three hypotheses based on the compression performance metrics presented in Table~\ref{tab:compression-results} and Figure~\ref{fig:compression-ratio}:
 
-\textbf{Hypothesis H1 (OpenZL improves row-oriented compression):} \textit{Supported.} OpenZL mostly achieves higher compression ratios for OTLP compared to standard zstd across all workloads, especially at larger batch sizes.
+(H1) OpenZL improves row-oriented compression: Supported. As shown in Figure~\ref{fig:compression-ratio}, OpenZL (solid red line) mostly achieves higher compression ratios than zstd (dotted green line) for OTLP across all workloads, especially at larger batch sizes.
 
-\textbf{Hypothesis H2 (Columnar format aids compression):} \textit{Strongly supported.} OTAP with delta dictionary encoding and zstd consistently outperforms OTLP+zstd, as well as OTLP+OpenZL validating the OpenTelemetry community's motivation for developing OTAP. The columnar organization provides 1-2x improvement in compression ratio over row-oriented format with the same compressor.
+(H2) Columnar format aids compression: Strongly supported. Figure~\ref{fig:compression-ratio} shows OTAP+zstd (dotted blue line) consistently outperforms OTLP+zstd and OTLP+OpenZL, validating the OpenTelemetry community's motivation for developing OTAP. The columnar organization provides 1.3--2.2x improvement in compression over row-oriented format with the same compressor.
 
-\textbf{Hypothesis H3 (Format-aware compression bridges the gap):} \textit{Not well supported.} Even batch sizes above 10000 data points, OTLP+OpenZL fails to achieve compression ratios comparable to OTAP+zstd (delta dictionary). 
+(H3) Format-aware compression bridges the gap: Not well supported for OTel workloads, but supported for TPC-H. For telemetry workloads in Figure~\ref{fig:compression-ratio}, OTLP+OpenZL fails to reach OTAP+zstd even at large batch sizes. However, for TPC-H, OpenZL outperforms Arrow at larger batch sizes. This difference may be attributed to TPC-H's flat schema: the nested hierarchical structure of OTel data enables domain-specific optimizations in OTAP (sorting, columnar deduplication) that provide significant compression benefits, while flat schemas like TPC-H cannot leverage these optimizations as effectively. This raises the question: which specific optimizations give OTAP its edge for OTel workloads?
 
-\begin{figure*}[t]
+\subsection{Decomposing OTAP's Advantage}
+
+To understand why H3 fails for OTel workloads, we conducted an ablation study examining four key optimizations in OTAP: sorting, delta dictionary, columnar deduplication, and dictionary encoding. We created variants that disable each optimization individually while keeping others enabled.
+
+\begin{table}[h]
+\centering
+\caption{Effect of Disabling Each OTAP Optimization (Batch Size 50,000)}
+\label{tab:ablation}
+\small
+\begin{tabular}{l|p{5cm}}
+\toprule
+\textbf{Optimization Disabled} & \textbf{Effect} \\
+\midrule
+Dictionary Encoding & 2--6x worse than OTLP+zstd \\
+Sorting & Worse than OTLP+zstd in 2/4 workloads \\
+Delta Dictionary & 1--9\% degradation from OTAP \\
+Columnar Dedup & 1--11\% degradation from OTAP \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The results reveal that dictionary encoding is essential---without it, OTAP performs 2--6x \textit{worse} than OTLP+zstd. Sorting is also critical: disabling it causes OTAP to underperform OTLP+zstd in half of the workloads. Delta dictionary and columnar deduplication provide diminishing returns at large batch sizes (1--11\% degradation).
+
+When sorting is disabled, OTLP+OpenZL outperforms OTAP in three of four OTel workloads. This demonstrates that OTAP's sorting optimization creates compression patterns that row-oriented formats cannot easily replicate.
+
+\begin{figure*}[!htb]
 \centering
 \includegraphics[width=\textwidth]{figures/compression_ratio_combined.png}
-\caption{Compression ratio vs. batch size across all workloads.}
+\caption{Compression ratio vs. batch size across all workloads. Higher is better. Arrow without sorting only outperforms Proto+OpenZL in Hipstershop Traces; OpenZL wins in the other three OTel workloads. For TPC-H, Proto+OpenZL performs similarly to Arrow.}
 \label{fig:compression-ratio}
 \end{figure*}
 
-\begin{figure*}[t]
+\begin{figure*}[!htb]
 \centering
 \includegraphics[width=\textwidth]{figures/compression_speed_combined.png}
-\caption{Compression speed vs. batch size across all workloads. }
-\label{fig:compression-time}
+\caption{Compression speed vs. batch size across all workloads. Higher is better. OpenZL shows slower compression than zstd for OTel workloads but improves for TPC-H.}
+\label{fig:compression-speed}
 \end{figure*}
 
-\begin{figure*}[t]
+\begin{figure*}[!htb]
 \centering
 \includegraphics[width=\textwidth]{figures/decompression_speed_combined.png}
-\caption{Decompression speed vs. batch size across all workloads.}
-\label{fig:decompression-time}
+\caption{Decompression speed vs. batch size across all workloads. Higher is better. Unlike other compressors, OpenZL's decompression does not speed up with larger batch sizes, suggesting potential for performance improvement in OpenZL's implementation.}
+\label{fig:decompression-speed}
 \end{figure*}
-
-
 
 \subsection{Compression and Decompression Speed}
 
-For OTel workloads, OpenZL demonstrates suboptimal performance in both compression and decompression. Notably, performance degrades slightly with larger batch sizes. This is a counterintuitive behavior that suggests potential optimization opportunities within OpenZL. With TPC-H workloads, compression speed shows improvement, though decompression remains considerably slow. This decompression bottleneck may stem from OpenZL's use of a universal decompressor that operates independently of the format-specific compression algorithms applied to individual files.
-
-\subsection{Dictionary Encoding Impact on OTAP}
-
-To understand the fundamental mechanisms behind OTAP's compression efficiency, we evaluated three dictionary encoding strategies:
-
-\begin{enumerate}
-    \item \textbf{Stateful (Delta Dictionary):} Maintains dictionary across batches, transmitting only new entries
-    \item \textbf{Dictionary per Batch:} Each batch includes a complete dictionary
-    \item \textbf{No Dictionary:} Disables dictionary encoding entirely
-\end{enumerate}
-
-% PLACEHOLDER: Figure 9
-% Caption: "Impact of dictionary encoding strategy on OTAP compression ratio"
-% Description: Line graph comparing OTAP+zstd with three dictionary modes across batch sizes for a representative workload
-
-\textbf{Critical finding:} Dictionary encoding is fundamental to OTAP's compression advantage. Without dictionary encoding, OTAP+zstd actually performs \textit{worse} than OTLP+zstd, demonstrating that the columnar format alone is insufficient—the combination of columnar organization and dictionary encoding is what enables superior compression. Therefore the success of columnar protocols depends not just on data reorganization, but on complementary encoding strategies that exploit the resulting data locality. Following this, we sought to see if using dictionary encoding within OTLP will be beneficial, and we did see some gains in compression speed (but not in compression ratio) by using dictionary per batch. This motivates investing some effort in making delta dictionary work for row formats. This also seems to be an open problem that the OTel community is looking at.  
-
-\subsection{Workload-Specific Analysis}
-
-While metrics and traces showed no consistent performance differences, TPC-H consistently achieved strong performance with OpenZL. This likely results from two complementary factors: OTAP heavily exploits columnar deduplication through dictionary encoding, and the OTel community has extensively optimized OTAP for telemetry workloads, explaining its superior performance on OTel data compared to generic analytical datasets like TPC-H.
+Figures~\ref{fig:compression-speed} and~\ref{fig:decompression-speed} show compression and decompression speeds across workloads. For OTel workloads, OpenZL demonstrates suboptimal performance in both compression and decompression. Notably, performance degrades slightly with larger batch sizes. This is a counterintuitive behavior that suggests potential optimization opportunities within OpenZL. With TPC-H workloads, compression speed shows improvement, though decompression remains considerably slow. This decompression bottleneck may stem from OpenZL's use of a universal decompressor that operates independently of the format-specific compression algorithms applied to individual files.
 
 
 \section{Related Work and Discussion}
@@ -449,34 +454,47 @@ OTel Arrow \cite{otel-arrow} represents the application of columnar principles t
 
 Specialized compression techniques have been developed for various domains:
 
-\textbf{Time-series databases:} Gorilla \cite{gorilla} introduced delta-of-delta encoding and XOR-based compression for time-series metrics. These techniques exploit temporal locality and value similarity in metrics data.
-
-\textbf{Log compression:} LogZip \cite{logzip} uses pattern mining and neural networks to compress log data by identifying repeated templates and parameter values.
+Gorilla \cite{gorilla} introduced delta-of-delta encoding and XOR-based compression for time-series metrics, exploiting temporal locality and value similarity in metrics data. LogZip \cite{logzip} uses pattern mining and neural networks to compress log data by identifying repeated templates and parameter values.
 
 OpenZL extends these ideas to a general framework that can automatically discover and exploit domain-specific patterns through training, rather than requiring hand-crafted compression strategies.
 
 \subsection{Format-Aware Compression}
 
-Format-aware compression has been explored in several contexts:
+Format-aware compression has been explored in several contexts. XMill \cite{xmill} and XPRESS \cite{xpress} separate structure from content in XML documents, enabling better compression of both components. Cap'n Proto's \cite{capnproto} "packing" compression removes sequences of zero bytes by encoding them efficiently with a tag byte system, achieving message sizes comparable to Protocol Buffers while remaining faster to process.
 
-\textbf{XML compression:} XMill \cite{xmill} and XPRESS \cite{xpress} separate structure from content in XML documents, enabling better compression of both components.
-
-\textbf{Protocol Buffer optimization:} Cap'n Proto's \cite{capnproto}  "packing" compression removes sequences of zero bytes (from unset fields, padding, and unused space) by encoding them efficiently with a tag byte system, achieving message sizes comparable to Protocol Buffers while remaining faster to process.
-
-OpenZL differs from these approaches in its use of automated training to generate workload-specific compression plans, rather than relying on fixed heuristics. Our work set out to demonstrate that automated training on structured data can achieve compression performance competitive with manually-optimized protocols, bridging the gap between general-purpose and domain-specific compression. However, we found that OTAP's exemplar performance remains difficult to surpass, suggesting that substantial engineering effort is required to achieve optimal results. Despite this limitation, OpenZL serves as a viable alternative for non-OTel workloads. The principal contribution of this work lies in demonstrating that format-aware compression can approach the compression benefits of columnar formats without requiring data reorganization, though it cannot replicate the query-time and processing advantages inherent to columnar storage architectures.
+OpenZL differs from these approaches in its use of automated training to generate workload-specific compression plans, rather than relying on fixed heuristics. Our work set out to demonstrate that automated training on structured data can achieve compression performance competitive with manually-optimized protocols. However, we found that OTAP's performance remains difficult to surpass for OTel workloads due to its sorting optimization, which creates compression patterns that row-oriented formats cannot easily replicate. Despite this limitation, OpenZL serves as a viable alternative for non-OTel workloads where it performs comparably to columnar formats.
 
 \subsection{Practical Deployment Considerations}
 
-Organizations evaluating these approaches should consider:
+Based on our findings, we provide guidance on when each approach is appropriate, separated by workload type.
 
-\begin{enumerate}
-    \item \textbf{Migration cost vs. benefit:} Protocol migration involves not just code changes but operational risk, testing, and potential service disruption. Format-aware compression can be deployed as a drop-in replacement for existing compressors with minimal infrastructure changes.
-    
-    \item \textbf{Training overhead:} OpenZL requires representative training data and periodic retraining as workload characteristics evolve. Organizations must establish processes for training data collection and compressor updates.
+\subsubsection{OTel Workloads}
 
-\end{enumerate}
+For telemetry data with deeply nested hierarchical schemas:
 
-Ultimately, the choice between format-aware compression and protocol migration depends on an organization's specific constraints and priorities. Our work provides empirical evidence to inform this decision, demonstrating that sophisticated compression techniques can bridge much, though not all of the efficiency gap between row-oriented and columnar protocols.
+Use OTAP (columnar protocol) when maximum compression is the primary goal---OTAP achieves 1.3--2.2x better compression ratio than OTLP+zstd at all batch sizes, even as small as batch size 10.
+
+Use OTLP+OpenZL (format-aware compression) when infrastructure changes are prohibitive or risky. For large batch sizes (1,000+ data points), OpenZL provides modest compression improvement over zstd while serving as a drop-in replacement.
+
+Use OTLP+zstd (standard compression) when batch sizes are small (<1,000 data points) where OpenZL provides little to no compression improvement over zstd, or when simplicity and minimal dependencies are priorities.
+
+\subsubsection{Non-OTel Workloads}
+
+For structured data with flat schemas, our TPC-H evaluation shows that Proto+OpenZL outperforms Arrow+zstd at larger batch sizes. However, this is based on a single workload evaluation, and we recommend benchmarking on representative data before making deployment decisions.
+
+For workloads with nested schemas that are not OTel-specific, performance may vary depending on schema complexity.
+
+\subsubsection{General Trade-offs}
+
+OpenZL requires training data collection and periodic retraining as workload characteristics evolve, adding operational complexity. Columnar protocols require format migration but provide predictable compression with standard zstd.
+
+\section{Conclusion}
+
+This paper investigated whether format-aware compression can bridge the efficiency gap between row-oriented and columnar telemetry protocols. We evaluated OpenZL against OTAP across five workloads and found that while OpenZL improves upon standard compression for row-oriented data, it achieves only 45--91\% of OTAP's compression ratio for OTel workloads at large batch sizes.
+
+Our ablation study revealed that OTAP's advantage stems primarily from dictionary encoding and sorting optimizations. Dictionary encoding is essential---without it, OTAP performs 2--6x worse than OTLP+zstd. When sorting is disabled, OTLP+OpenZL outperforms OTAP in three of four OTel workloads, demonstrating that sorting creates compression patterns that row-oriented formats cannot easily replicate due to their hierarchical structure.
+
+For non-OTel workloads like TPC-H, OpenZL performs competitively with Arrow, suggesting that format-aware compression is a viable alternative when domain-specific optimizations are not in play. However, for telemetry data where OTAP has been extensively optimized, protocol migration remains the path to maximum compression efficiency.
 
 \bibliographystyle{ACM-Reference-Format}
 \bibliography{refs}

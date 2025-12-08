@@ -37,7 +37,7 @@ struct Args {
     iterations: usize,
 
     /// Data directory containing batch directories
-    #[arg(long, default_value = "data/generated/")]
+    #[arg(long, default_value = "data/generated/test/")]
     data_dir: PathBuf,
 
     /// Compressor directory containing trained.zlc files

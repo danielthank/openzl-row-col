@@ -21,17 +21,17 @@ import matplotlib.pyplot as plt
 
 matplotlib.use("Agg")
 
-# Paper-friendly settings
+# Paper-friendly settings with larger fonts
 plt.rcParams.update(
     {
-        "font.size": 12,
-        "axes.titlesize": 14,
-        "axes.labelsize": 12,
-        "xtick.labelsize": 10,
-        "ytick.labelsize": 10,
-        "legend.fontsize": 10,
+        "font.size": 14,
+        "axes.titlesize": 16,
+        "axes.labelsize": 14,
+        "xtick.labelsize": 12,
+        "ytick.labelsize": 12,
+        "legend.fontsize": 11,
         "lines.linewidth": 2.5,
-        "lines.markersize": 8,
+        "lines.markersize": 10,
     }
 )
 
@@ -50,9 +50,12 @@ def get_series_configs_otel():
         # zstd (dotted lines)
         ("otlp_metrics", "zstd", "Proto + zstd", "#2ca02c", "o", ":"),
         ("otlp_traces", "zstd", "Proto + zstd", "#2ca02c", "o", ":"),
-        # OTAP variants
+        # OTAP variants: Arrow -> -delta dict -> -column dedup -> -sort -> -dict
         ("otap", "zstd", "Arrow + zstd", "#1f77b4", "^", ":"),
-        ("otapnodict", "zstd", "Arrow (No Dict) + zstd", "#9467bd", "v", ":"),
+        ("otapdictperfile", "zstd", "Arrow (-delta dict)", "#e377c2", "P", ":"),
+        ("otapnodedup", "zstd", "Arrow (-column dedup)", "#ff7f0e", "d", ":"),
+        ("otapnosort", "zstd", "Arrow (-sort)", "#17becf", "x", ":"),
+        ("otapnodict", "zstd", "Arrow (-dict)", "#9467bd", "v", ":"),
     ]
 
 
@@ -65,7 +68,7 @@ def get_series_configs_tpch():
         ("tpch_proto", "zstd", "Proto + zstd", "#2ca02c", "o", ":"),
         # Arrow
         ("arrow", "zstd", "Arrow + zstd", "#1f77b4", "p", ":"),
-        ("arrownodict", "zstd", "Arrow (No Dict) + zstd", "#9467bd", "v", ":"),
+        ("arrownodict", "zstd", "Arrow (-dict)", "#9467bd", "v", ":"),
     ]
 
 
@@ -88,7 +91,13 @@ def extract_compression_ratio_series(results, dataset, compressor, method):
     filtered.sort(key=lambda x: x["batch_size"])
 
     # For OTAP/Arrow, use baseline uncompressed bytes
-    if compressor in ("otap", "otapnodict", "otapdictperfile"):
+    if compressor in (
+        "otap",
+        "otapnodict",
+        "otapdictperfile",
+        "otapnosort",
+        "otapnodedup",
+    ):
         baseline = {}
         for r in results:
             if r["dataset"] == dataset and r["compressor"] in (
@@ -353,22 +362,29 @@ def create_compression_ratio_combined(
         plot_dataset_compression_ratio(ax, results, dataset, configs, title)
 
     # Remove individual legends and create shared legend
-    # Get handles and labels from first plot (labels are unified across all)
-    handles, labels = axes[0].get_legend_handles_labels()
+    # Collect handles/labels from all axes to include all series
+    all_handles = {}
+    for ax in axes:
+        handles, labels = ax.get_legend_handles_labels()
+        for h, l in zip(handles, labels):
+            if l not in all_handles:
+                all_handles[l] = h
+    handles = list(all_handles.values())
+    labels = list(all_handles.keys())
 
-    # Create shared legend at the bottom
+    # Create shared legend at the bottom (single row)
     fig.legend(
         handles,
         labels,
         loc="lower center",
-        ncol=4,
+        ncol=len(labels),
         bbox_to_anchor=(0.5, -0.08),
         frameon=True,
         fontsize=11,
     )
 
     plt.tight_layout()
-    plt.subplots_adjust(bottom=0.22)
+    plt.subplots_adjust(bottom=0.20)
 
     output_file = output_dir / "compression_ratio_combined.png"
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
@@ -405,21 +421,29 @@ def create_speed_combined(
         plot_dataset_speed(ax, results, dataset, configs, title, time_type)
 
     # Remove individual legends and create shared legend
-    handles, labels = axes[0].get_legend_handles_labels()
+    # Collect handles/labels from all axes to include all series
+    all_handles = {}
+    for ax in axes:
+        handles, labels = ax.get_legend_handles_labels()
+        for h, l in zip(handles, labels):
+            if l not in all_handles:
+                all_handles[l] = h
+    handles = list(all_handles.values())
+    labels = list(all_handles.keys())
 
-    # Create shared legend at the bottom
+    # Create shared legend at the bottom (single row)
     fig.legend(
         handles,
         labels,
         loc="lower center",
-        ncol=4,
+        ncol=len(labels),
         bbox_to_anchor=(0.5, -0.08),
         frameon=True,
         fontsize=11,
     )
 
     plt.tight_layout()
-    plt.subplots_adjust(bottom=0.22)
+    plt.subplots_adjust(bottom=0.20)
 
     output_file = output_dir / f"{time_type}_speed_combined.png"
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
@@ -456,23 +480,276 @@ def create_time_combined(
         plot_dataset_time(ax, results, dataset, configs, title, time_type)
 
     # Remove individual legends and create shared legend
-    handles, labels = axes[0].get_legend_handles_labels()
+    # Collect handles/labels from all axes to include all series
+    all_handles = {}
+    for ax in axes:
+        handles, labels = ax.get_legend_handles_labels()
+        for h, l in zip(handles, labels):
+            if l not in all_handles:
+                all_handles[l] = h
+    handles = list(all_handles.values())
+    labels = list(all_handles.keys())
 
-    # Create shared legend at the bottom
+    # Create shared legend at the bottom (single row)
     fig.legend(
         handles,
         labels,
         loc="lower center",
-        ncol=4,
+        ncol=len(labels),
         bbox_to_anchor=(0.5, -0.08),
         frameon=True,
         fontsize=11,
     )
 
     plt.tight_layout()
-    plt.subplots_adjust(bottom=0.22)
+    plt.subplots_adjust(bottom=0.20)
 
     output_file = output_dir / f"{time_type}_time_combined.png"
+    plt.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"Generated: {output_file}")
+
+
+def extract_format_efficiency_series(results, dataset, compressor):
+    """Extract Format Efficiency = Proto_Uncompressed / Format_Uncompressed.
+
+    Values > 1 mean format is smaller than Proto (deduplication wins).
+    Values < 1 mean format is larger than Proto (overhead wins).
+    """
+    baseline = get_proto_baseline(results, dataset)
+    if not baseline:
+        return [], []
+
+    filtered = [
+        r for r in results if r["dataset"] == dataset and r["compressor"] == compressor
+    ]
+    filtered.sort(key=lambda x: x["batch_size"])
+
+    batch_sizes = []
+    efficiencies = []
+    for r in filtered:
+        bs = r["batch_size"]
+        if bs in baseline:
+            efficiency = baseline[bs] / r["total_uncompressed_bytes"]
+            batch_sizes.append(bs)
+            efficiencies.append(efficiency)
+
+    return batch_sizes, efficiencies
+
+
+def extract_algorithm_effectiveness_series(results, dataset, compressor, method="zstd"):
+    """Extract Algorithm Effectiveness = Format_Uncompressed / Compressed.
+
+    Measures how well the compression algorithm compresses the format's data.
+
+    Args:
+        method: 'zstd' or 'openzl'
+    """
+    filtered = [
+        r for r in results if r["dataset"] == dataset and r["compressor"] == compressor
+    ]
+    filtered.sort(key=lambda x: x["batch_size"])
+
+    batch_sizes = []
+    effectiveness = []
+    for r in filtered:
+        if method in r:
+            ratio = r["total_uncompressed_bytes"] / r[method]["total_bytes"]
+            batch_sizes.append(r["batch_size"])
+            effectiveness.append(ratio)
+
+    return batch_sizes, effectiveness
+
+
+def extract_final_cr_series(results, dataset, compressor, method="zstd"):
+    """Extract Final CR = Proto_Uncompressed / Compressed.
+
+    This equals Format_Efficiency × Algorithm_Effectiveness.
+
+    Args:
+        method: 'zstd' or 'openzl'
+    """
+    baseline = get_proto_baseline(results, dataset)
+    if not baseline:
+        return [], []
+
+    filtered = [
+        r for r in results if r["dataset"] == dataset and r["compressor"] == compressor
+    ]
+    filtered.sort(key=lambda x: x["batch_size"])
+
+    batch_sizes = []
+    crs = []
+    for r in filtered:
+        bs = r["batch_size"]
+        if bs in baseline and method in r:
+            cr = baseline[bs] / r[method]["total_bytes"]
+            batch_sizes.append(bs)
+            crs.append(cr)
+
+    return batch_sizes, crs
+
+
+def plot_cr_decomposition(
+    ax, results, dataset, configs, title, metric_type, use_log_y=True
+):
+    """Plot Format Efficiency, Algorithm Effectiveness, or Final CR.
+
+    Args:
+        metric_type: 'format_efficiency', 'algorithm_effectiveness', or 'final_cr'
+        configs: list of (compressor, method, label, color, marker, linestyle)
+    """
+    plotted_labels = set()
+
+    for compressor, method, label, color, marker, linestyle in configs:
+        if metric_type == "format_efficiency":
+            batch_sizes, values = extract_format_efficiency_series(
+                results, dataset, compressor
+            )
+        elif metric_type == "algorithm_effectiveness":
+            batch_sizes, values = extract_algorithm_effectiveness_series(
+                results, dataset, compressor, method
+            )
+        elif metric_type == "final_cr":
+            batch_sizes, values = extract_final_cr_series(
+                results, dataset, compressor, method
+            )
+        else:
+            continue
+
+        if batch_sizes and label not in plotted_labels:
+            ax.plot(
+                batch_sizes,
+                values,
+                label=label,
+                color=color,
+                marker=marker,
+                linestyle=linestyle,
+                linewidth=2.5,
+                markersize=8,
+            )
+            plotted_labels.add(label)
+
+    ax.set_xscale("log")
+    if use_log_y:
+        ax.set_yscale("log")
+
+    # Add reference line at y=1 for format efficiency
+    if metric_type == "format_efficiency":
+        ax.axhline(y=1.0, color="gray", linestyle="--", alpha=0.5, label="_nolegend_")
+
+    ax.set_xlabel("Batch Size")
+    ylabel = {
+        "format_efficiency": "Format Efficiency\n(Proto/Format Uncomp)",
+        "algorithm_effectiveness": "Algorithm Effectiveness\n(Uncomp/Compressed)",
+        "final_cr": "Final Compression Ratio\n(Proto Uncomp/Compressed)",
+    }[metric_type]
+    ax.set_ylabel(ylabel)
+    ax.set_title(title, fontweight="bold")
+    ax.grid(True, alpha=0.3, which="both")
+
+
+def create_cr_decomposition_combined(
+    otel_data: dict, tpch_data: dict, output_dir: Path
+):
+    """Create figure showing compression ratio decomposition.
+
+    Shows three rows:
+    1. Format Efficiency (Proto_Uncomp / Format_Uncomp)
+    2. Algorithm Effectiveness (Format_Uncomp / Compressed) - includes zstd and openzl
+    3. Final CR = Format Efficiency × Algorithm Effectiveness
+    """
+    fig, axes = plt.subplots(3, 5, figsize=(20, 10))
+
+    otel_results = otel_data["results"]
+    tpch_results = tpch_data["results"]
+
+    otel_configs = get_series_configs_otel()
+    tpch_configs = get_series_configs_tpch()
+
+    # Define datasets
+    datasets = [
+        (otel_results, "hipstershop-otelmetrics", otel_configs, "Hipstershop Metrics"),
+        (otel_results, "hipstershop-oteltraces", otel_configs, "Hipstershop Traces"),
+        (otel_results, "astronomy-otelmetrics", otel_configs, "Astronomy Metrics"),
+        (otel_results, "astronomy-oteltraces", otel_configs, "Astronomy Traces"),
+        (tpch_results, "tpch-lineitem", tpch_configs, "TPC-H LineItem"),
+    ]
+
+    # Row 0: Format Efficiency
+    for i, (results, dataset, configs, title) in enumerate(datasets):
+        plot_cr_decomposition(
+            axes[0, i], results, dataset, configs, title, "format_efficiency"
+        )
+
+    # Row 1: Algorithm Effectiveness
+    for i, (results, dataset, configs, _) in enumerate(datasets):
+        plot_cr_decomposition(
+            axes[1, i], results, dataset, configs, "", "algorithm_effectiveness"
+        )
+
+    # Row 2: Final CR (product)
+    for i, (results, dataset, configs, _) in enumerate(datasets):
+        plot_cr_decomposition(axes[2, i], results, dataset, configs, "", "final_cr")
+
+    # Collect handles/labels from all axes
+    all_handles = {}
+    for row in axes:
+        for ax in row:
+            handles, labels = ax.get_legend_handles_labels()
+            for h, l in zip(handles, labels):
+                if l not in all_handles:
+                    all_handles[l] = h
+    handles = list(all_handles.values())
+    labels = list(all_handles.keys())
+
+    # Create shared legend at the bottom
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        ncol=len(labels),
+        bbox_to_anchor=(0.5, -0.02),
+        frameon=True,
+        fontsize=10,
+    )
+
+    # Add row labels
+    fig.text(
+        0.02,
+        0.78,
+        "Format\nEfficiency",
+        fontsize=11,
+        fontweight="bold",
+        rotation=90,
+        va="center",
+        ha="center",
+    )
+    fig.text(
+        0.02,
+        0.50,
+        "Algorithm\nEffectiveness",
+        fontsize=11,
+        fontweight="bold",
+        rotation=90,
+        va="center",
+        ha="center",
+    )
+    fig.text(
+        0.02,
+        0.22,
+        "Final CR\n(Product)",
+        fontsize=11,
+        fontweight="bold",
+        rotation=90,
+        va="center",
+        ha="center",
+    )
+
+    plt.tight_layout()
+    plt.subplots_adjust(bottom=0.10, left=0.08, hspace=0.25)
+
+    output_file = output_dir / "cr_decomposition_combined.png"
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Generated: {output_file}")
@@ -483,29 +760,40 @@ def main():
     repo_root = script_dir.parent
     data_dir = repo_root / "data"
 
+    # Try combined file first, fall back to separate files
+    all_json = data_dir / "benchmark_all_zstd9_iter3.json"
     otel_json = data_dir / "benchmark_otel_zstd9_iter3.json"
     tpch_json = data_dir / "benchmark_tpch_zstd9_iter3.json"
     output_dir = data_dir / "paper_plots"
     output_dir.mkdir(exist_ok=True)
 
-    if not otel_json.exists():
-        print(f"Error: {otel_json} not found")
-        return
+    if all_json.exists():
+        # Use combined file
+        all_data = load_benchmark(all_json)
+        print(f"Loaded {len(all_data['results'])} results from combined file")
+        otel_data = all_data
+        tpch_data = all_data
+    else:
+        # Fall back to separate files
+        if not otel_json.exists():
+            print(f"Error: {otel_json} not found")
+            return
 
-    if not tpch_json.exists():
-        print(f"Error: {tpch_json} not found")
-        return
+        if not tpch_json.exists():
+            print(f"Error: {tpch_json} not found")
+            return
 
-    otel_data = load_benchmark(otel_json)
-    tpch_data = load_benchmark(tpch_json)
-    print(f"Loaded {len(otel_data['results'])} OTel results")
-    print(f"Loaded {len(tpch_data['results'])} TPC-H results")
+        otel_data = load_benchmark(otel_json)
+        tpch_data = load_benchmark(tpch_json)
+        print(f"Loaded {len(otel_data['results'])} OTel results")
+        print(f"Loaded {len(tpch_data['results'])} TPC-H results")
 
     create_compression_ratio_combined(otel_data, tpch_data, output_dir)
     create_speed_combined(otel_data, tpch_data, output_dir, "compression")
     create_speed_combined(otel_data, tpch_data, output_dir, "decompression")
     create_time_combined(otel_data, tpch_data, output_dir, "compression")
     create_time_combined(otel_data, tpch_data, output_dir, "decompression")
+    create_cr_decomposition_combined(otel_data, tpch_data, output_dir)
 
     print(f"\nAll plots saved to: {output_dir}")
 

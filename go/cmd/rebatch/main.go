@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/apache/arrow-go/v18/arrow/ipc"
+	"github.com/danielthank/15712/go/pkg/arrowutil"
 	"github.com/danielthank/15712/go/pkg/otlpmetricsdict"
 	"github.com/danielthank/15712/go/pkg/otlptracesdict"
 	"github.com/klauspost/compress/zstd"
@@ -30,6 +31,8 @@ const (
 	OTAPModeNative      OTAPMode = iota // Reuse producer (incremental dict)
 	OTAPModeNoDict                      // config.WithNoDictionary()
 	OTAPModeDictPerFile                 // New producer per batch
+	OTAPModeNoSort                      // No sorting optimization
+	OTAPModeNoDedup                     // No resource/scope deduplication
 )
 
 // Metadata contains information about the generated dataset
@@ -54,9 +57,15 @@ func main() {
 	inputFile := flag.String("input", "", "Input .zst file")
 	mode := flag.String("mode", "", "Mode: 'metrics', 'traces', or 'dump'")
 	batchSizeStr := flag.String("batch-size", "", "Comma-separated list of batch sizes")
-	formatStr := flag.String("format", "", "Comma-separated list of formats: otlp, otlpmetricsdict, otlptracesdict, otap, otapnodict, otapdictperfile")
+	formatStr := flag.String("format", "", "Comma-separated list of formats: otlp, otlpmetricsdict, otlptracesdict, otap, otapnodict, otapdictperfile, otapnosort")
+	outputDir := flag.String("output", "", "Output directory (default: ../data/generated)")
 	dumpFile := flag.String("dump-file", "", "File to dump (for dump mode)")
 	flag.Parse()
+
+	// Set default output directory
+	if *outputDir == "" {
+		*outputDir = filepath.Join("..", "data", "generated")
+	}
 
 	// Handle dump mode
 	if *mode == "dump" {
@@ -65,6 +74,16 @@ func main() {
 			os.Exit(1)
 		}
 		dumpOTAPFile(*dumpFile)
+		return
+	}
+
+	// Handle analyze mode
+	if *mode == "analyze" {
+		if *inputFile == "" {
+			fmt.Fprintf(os.Stderr, "Usage: %s --mode analyze --input <file.zst>\n", os.Args[0])
+			os.Exit(1)
+		}
+		analyzeTraces(*inputFile)
 		return
 	}
 
@@ -101,12 +120,14 @@ func main() {
 		"otap":            true,
 		"otapnodict":      true,
 		"otapdictperfile": true,
+		"otapnosort":      true,
+		"otapnodedup":     true,
 	}
 	formats := []string{}
 	for _, format := range strings.Split(*formatStr, ",") {
 		format = strings.TrimSpace(format)
 		if !validFormats[format] {
-			fmt.Fprintf(os.Stderr, "Error: invalid format '%s', must be one of: otlp, otlpmetricsdict, otlptracesdict, otap, otapnodict, otapdictperfile\n", format)
+			fmt.Fprintf(os.Stderr, "Error: invalid format '%s', must be one of: otlp, otlpmetricsdict, otlptracesdict, otap, otapnodict, otapdictperfile, otapnosort, otapnodedup\n", format)
 			os.Exit(1)
 		}
 		formats = append(formats, format)
@@ -114,13 +135,13 @@ func main() {
 
 	// Read input file
 	if *mode == "metrics" {
-		processMetrics(*inputFile, batchSizes, formats)
+		processMetrics(*inputFile, batchSizes, formats, *outputDir)
 	} else {
-		processTraces(*inputFile, batchSizes, formats)
+		processTraces(*inputFile, batchSizes, formats, *outputDir)
 	}
 }
 
-func processMetrics(inputFile string, batchSizes []int, formats []string) {
+func processMetrics(inputFile string, batchSizes []int, formats []string, baseOutputDir string) {
 	// Read all metrics from input file
 	allMetrics := []pmetric.Metrics{}
 
@@ -190,7 +211,7 @@ func processMetrics(inputFile string, batchSizes []int, formats []string) {
 		for _, format := range formats {
 			fmt.Printf("\nProcessing batch-size=%d format=%s\n", batchSize, format)
 
-			outputDir := filepath.Join("..", "data", "generated", fmt.Sprintf("%s-%s-%d", baseName, format, batchSize))
+			outputDir := filepath.Join(baseOutputDir, fmt.Sprintf("%s-%s-%d", baseName, format, batchSize))
 			if err := os.MkdirAll(outputDir, 0755); err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating directory: %v\n", err)
 				continue
@@ -211,6 +232,10 @@ func processMetrics(inputFile string, batchSizes []int, formats []string) {
 				writeBatchesOTAPMetrics(batches, outputDir, OTAPModeNoDict)
 			case "otapdictperfile":
 				writeBatchesOTAPMetrics(batches, outputDir, OTAPModeDictPerFile)
+			case "otapnosort":
+				writeBatchesOTAPMetrics(batches, outputDir, OTAPModeNoSort)
+			case "otapnodedup":
+				writeBatchesOTAPMetricsNoDedup(batches, outputDir)
 			}
 
 			// Write metadata
@@ -221,7 +246,7 @@ func processMetrics(inputFile string, batchSizes []int, formats []string) {
 	}
 }
 
-func processTraces(inputFile string, batchSizes []int, formats []string) {
+func processTraces(inputFile string, batchSizes []int, formats []string, baseOutputDir string) {
 	// Read all traces from input file
 	allTraces := []ptrace.Traces{}
 
@@ -291,7 +316,7 @@ func processTraces(inputFile string, batchSizes []int, formats []string) {
 		for _, format := range formats {
 			fmt.Printf("\nProcessing batch-size=%d format=%s\n", batchSize, format)
 
-			outputDir := filepath.Join("..", "data", "generated", fmt.Sprintf("%s-%s-%d", baseName, format, batchSize))
+			outputDir := filepath.Join(baseOutputDir, fmt.Sprintf("%s-%s-%d", baseName, format, batchSize))
 			if err := os.MkdirAll(outputDir, 0755); err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating directory: %v\n", err)
 				continue
@@ -312,6 +337,10 @@ func processTraces(inputFile string, batchSizes []int, formats []string) {
 				writeBatchesOTAPTraces(batches, outputDir, OTAPModeNoDict)
 			case "otapdictperfile":
 				writeBatchesOTAPTraces(batches, outputDir, OTAPModeDictPerFile)
+			case "otapnosort":
+				writeBatchesOTAPTraces(batches, outputDir, OTAPModeNoSort)
+			case "otapnodedup":
+				writeBatchesOTAPTracesNoDedup(batches, outputDir)
 			}
 
 			// Write metadata
@@ -509,6 +538,12 @@ func writeBatchesOTLPDictTraces(batches []ptrace.Traces, outputDir string) {
 }
 
 func writeBatchesOTAPMetrics(batches []pmetric.Metrics, outputDir string, mode OTAPMode) {
+	// For nosort mode, use the special NoSortMetricsProducer
+	if mode == OTAPModeNoSort {
+		writeBatchesOTAPMetricsNoSort(batches, outputDir)
+		return
+	}
+
 	var producer *arrow_record.Producer
 
 	// For native mode, create one producer and reuse (incremental dictionaries)
@@ -561,6 +596,70 @@ func writeBatchesOTAPMetrics(batches []pmetric.Metrics, outputDir string, mode O
 	fmt.Printf("  Wrote %d batches to %s\n", len(batches), outputDir)
 }
 
+func writeBatchesOTAPMetricsNoSort(batches []pmetric.Metrics, outputDir string) {
+	// Create fresh producer for each batch (no incremental dictionaries for nosort)
+	for i, batch := range batches {
+		producer := arrowutil.NewNoSortMetricsProducer(config.WithNoZstd())
+
+		arrowRecords, err := producer.BatchArrowRecordsFromMetrics(batch)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error converting batch %d to Arrow: %v\n", i, err)
+			fmt.Fprintf(os.Stderr, "  (This may be due to high cardinality - try using OTLP format instead)\n")
+			producer.Close()
+			return
+		}
+
+		data, err := proto.Marshal(arrowRecords)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error marshaling Arrow batch %d: %v\n", i, err)
+			producer.Close()
+			continue
+		}
+
+		producer.Close()
+
+		outputFile := filepath.Join(outputDir, fmt.Sprintf("payload_%04d.bin", i))
+		if err := os.WriteFile(outputFile, data, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing file: %v\n", err)
+			continue
+		}
+	}
+
+	fmt.Printf("  Wrote %d batches to %s\n", len(batches), outputDir)
+}
+
+func writeBatchesOTAPMetricsNoDedup(batches []pmetric.Metrics, outputDir string) {
+	// Create fresh producer for each batch (no resource/scope deduplication)
+	for i, batch := range batches {
+		producer := arrowutil.NewNoDedupMetricsProducer(config.WithNoZstd())
+
+		arrowRecords, err := producer.BatchArrowRecordsFromMetrics(batch)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error converting batch %d to Arrow: %v\n", i, err)
+			fmt.Fprintf(os.Stderr, "  (This may be due to high cardinality - try using OTLP format instead)\n")
+			producer.Close()
+			return
+		}
+
+		data, err := proto.Marshal(arrowRecords)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error marshaling Arrow batch %d: %v\n", i, err)
+			producer.Close()
+			continue
+		}
+
+		producer.Close()
+
+		outputFile := filepath.Join(outputDir, fmt.Sprintf("payload_%04d.bin", i))
+		if err := os.WriteFile(outputFile, data, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing file: %v\n", err)
+			continue
+		}
+	}
+
+	fmt.Printf("  Wrote %d batches to %s\n", len(batches), outputDir)
+}
+
 func writeBatchesOTLPTraces(batches []ptrace.Traces, outputDir string) {
 	marshaler := ptrace.ProtoMarshaler{}
 
@@ -599,6 +698,15 @@ func writeBatchesOTAPTraces(batches []ptrace.Traces, outputDir string, mode OTAP
 		if mode == OTAPModeNoDict {
 			producer = arrow_record.NewProducerWithOptions(config.WithNoZstd(), config.WithNoDictionary())
 		}
+		// For nosort, create fresh producer with no sorting
+		if mode == OTAPModeNoSort {
+			producer = arrow_record.NewProducerWithOptions(
+				config.WithNoZstd(),
+				config.WithOrderSpanBy(config.OrderSpanByNothing),
+				config.WithOrderAttrs16By(config.OrderAttrs16ByNothing),
+				config.WithOrderAttrs32By(config.OrderAttrs32ByNothing),
+			)
+		}
 
 		arrowRecords, err := producer.BatchArrowRecordsFromTraces(batch)
 		if err != nil {
@@ -623,6 +731,38 @@ func writeBatchesOTAPTraces(batches []ptrace.Traces, outputDir string, mode OTAP
 		if mode != OTAPModeNative {
 			producer.Close()
 		}
+
+		outputFile := filepath.Join(outputDir, fmt.Sprintf("payload_%04d.bin", i))
+		if err := os.WriteFile(outputFile, data, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing file: %v\n", err)
+			continue
+		}
+	}
+
+	fmt.Printf("  Wrote %d batches to %s\n", len(batches), outputDir)
+}
+
+func writeBatchesOTAPTracesNoDedup(batches []ptrace.Traces, outputDir string) {
+	// Create fresh producer for each batch (no resource/scope deduplication)
+	for i, batch := range batches {
+		producer := arrowutil.NewNoDedupTracesProducer(config.WithNoZstd())
+
+		arrowRecords, err := producer.BatchArrowRecordsFromTraces(batch)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error converting batch %d to Arrow: %v\n", i, err)
+			fmt.Fprintf(os.Stderr, "  (This may be due to high cardinality - try using OTLP format instead)\n")
+			producer.Close()
+			return
+		}
+
+		data, err := proto.Marshal(arrowRecords)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error marshaling Arrow batch %d: %v\n", i, err)
+			producer.Close()
+			continue
+		}
+
+		producer.Close()
 
 		outputFile := filepath.Join(outputDir, fmt.Sprintf("payload_%04d.bin", i))
 		if err := os.WriteFile(outputFile, data, 0644); err != nil {
@@ -695,4 +835,157 @@ func dumpOTAPFile(filePath string) {
 		}
 		reader.Release()
 	}
+}
+
+// analyzeTraces reads a trace file and outputs diversity statistics
+func analyzeTraces(inputFile string) {
+	f, err := os.Open(inputFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening file: %v\n", err)
+		os.Exit(1)
+	}
+	defer f.Close()
+
+	zreader, err := zstd.NewReader(f)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating zstd reader: %v\n", err)
+		os.Exit(1)
+	}
+	defer zreader.Close()
+
+	unmarshaler := ptrace.ProtoUnmarshaler{}
+
+	// Track unique values
+	uniqueResources := make(map[string]int)  // resource hash -> count of spans
+	uniqueScopes := make(map[string]int)     // scope name -> count of spans
+	uniqueSpanNames := make(map[string]int)  // span name -> count
+	totalSpans := 0
+	totalPayloads := 0
+
+	for {
+		var sizeBytes [4]byte
+		n, err := zreader.Read(sizeBytes[:])
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			fmt.Fprintf(os.Stderr, "Error reading size: %v\n", err)
+			os.Exit(1)
+		}
+		if n != 4 {
+			fmt.Fprintf(os.Stderr, "Invalid input: expected 4 bytes\n")
+			os.Exit(1)
+		}
+
+		bytesSize := binary.BigEndian.Uint32(sizeBytes[:])
+		payload := make([]byte, bytesSize)
+
+		n, err = io.ReadFull(zreader, payload)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading payload: %v\n", err)
+			os.Exit(1)
+		}
+
+		traces, err := unmarshaler.UnmarshalTraces(payload)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error unmarshaling traces: %v\n", err)
+			os.Exit(1)
+		}
+
+		totalPayloads++
+
+		// Analyze traces
+		for i := 0; i < traces.ResourceSpans().Len(); i++ {
+			rs := traces.ResourceSpans().At(i)
+			resourceHash := hashResource(rs.Resource())
+
+			for j := 0; j < rs.ScopeSpans().Len(); j++ {
+				ss := rs.ScopeSpans().At(j)
+				scopeName := ss.Scope().Name()
+
+				for k := 0; k < ss.Spans().Len(); k++ {
+					span := ss.Spans().At(k)
+					spanName := span.Name()
+
+					uniqueResources[resourceHash]++
+					uniqueScopes[scopeName]++
+					uniqueSpanNames[spanName]++
+					totalSpans++
+				}
+			}
+		}
+	}
+
+	// Calculate statistics
+	fmt.Printf("\n=== Diversity Analysis: %s ===\n\n", filepath.Base(inputFile))
+	fmt.Printf("Total payloads:      %d\n", totalPayloads)
+	fmt.Printf("Total spans:         %d\n", totalSpans)
+	fmt.Printf("\n")
+	fmt.Printf("Unique resources:    %d\n", len(uniqueResources))
+	fmt.Printf("Unique scopes:       %d\n", len(uniqueScopes))
+	fmt.Printf("Unique span names:   %d\n", len(uniqueSpanNames))
+	fmt.Printf("\n")
+	fmt.Printf("Spans per resource:  %.2f\n", float64(totalSpans)/float64(len(uniqueResources)))
+	fmt.Printf("Spans per scope:     %.2f\n", float64(totalSpans)/float64(len(uniqueScopes)))
+	fmt.Printf("Spans per name:      %.2f\n", float64(totalSpans)/float64(len(uniqueSpanNames)))
+
+	// Show top resources by span count
+	fmt.Printf("\n--- Top 5 Resources by Span Count ---\n")
+	type kv struct {
+		key   string
+		value int
+	}
+	var sortedResources []kv
+	for k, v := range uniqueResources {
+		sortedResources = append(sortedResources, kv{k, v})
+	}
+	// Sort by value descending
+	for i := 0; i < len(sortedResources); i++ {
+		for j := i + 1; j < len(sortedResources); j++ {
+			if sortedResources[j].value > sortedResources[i].value {
+				sortedResources[i], sortedResources[j] = sortedResources[j], sortedResources[i]
+			}
+		}
+	}
+	for i := 0; i < 5 && i < len(sortedResources); i++ {
+		pct := float64(sortedResources[i].value) / float64(totalSpans) * 100
+		fmt.Printf("  %d. %s: %d spans (%.1f%%)\n", i+1, sortedResources[i].key, sortedResources[i].value, pct)
+	}
+
+	// Show top scopes by span count
+	fmt.Printf("\n--- Top 5 Scopes by Span Count ---\n")
+	var sortedScopes []kv
+	for k, v := range uniqueScopes {
+		sortedScopes = append(sortedScopes, kv{k, v})
+	}
+	for i := 0; i < len(sortedScopes); i++ {
+		for j := i + 1; j < len(sortedScopes); j++ {
+			if sortedScopes[j].value > sortedScopes[i].value {
+				sortedScopes[i], sortedScopes[j] = sortedScopes[j], sortedScopes[i]
+			}
+		}
+	}
+	for i := 0; i < 5 && i < len(sortedScopes); i++ {
+		pct := float64(sortedScopes[i].value) / float64(totalSpans) * 100
+		fmt.Printf("  %d. %s: %d spans (%.1f%%)\n", i+1, sortedScopes[i].key, sortedScopes[i].value, pct)
+	}
+}
+
+// hashResource creates a simple hash of resource attributes for deduplication counting
+func hashResource(resource pcommon.Resource) string {
+	attrs := resource.Attributes()
+	var parts []string
+	attrs.Range(func(k string, v pcommon.Value) bool {
+		parts = append(parts, fmt.Sprintf("%s=%s", k, v.AsString()))
+		return true
+	})
+	// Sort for consistent hashing
+	for i := 0; i < len(parts); i++ {
+		for j := i + 1; j < len(parts); j++ {
+			if parts[j] < parts[i] {
+				parts[i], parts[j] = parts[j], parts[i]
+			}
+		}
+	}
+	return strings.Join(parts, ",")
 }

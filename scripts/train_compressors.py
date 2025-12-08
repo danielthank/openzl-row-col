@@ -2,25 +2,29 @@
 """
 OpenZL Compressor Training Tool
 
-Simplified version: Samples 100 files per schema type and trains compressors.
-Creates training directories: data/otap/, data/otlp_metrics/, data/otlp_traces/, data/otlpmetricsdict/, data/otlptracesdict/, data/tpch_proto/
+Uses all payload files from train data to train OpenZL compressors.
+Creates training directories: data/otlp_metrics/, data/otlp_traces/, data/tpch_proto/
+
+Note: OTAP uses Arrow IPC format which doesn't need OpenZL training.
+      otlpmetricsdict/otlptracesdict use the same protobuf schema as regular OTLP.
 
 Usage:
     python train_compressors.py                           # Train all schemas
     python train_compressors.py --schema tpch             # Train only TPC-H
-    python train_compressors.py --schema otel             # Train only OTel (otap, otlp_metrics, otlp_traces, otlpmetricsdict, otlptracesdict)
-    python train_compressors.py --schema otlptracesdict   # Train only otlptracesdict
+    python train_compressors.py --schema otel             # Train only OTel (otlp_metrics, otlp_traces)
+    python train_compressors.py --schema otlp_traces      # Train only otlp_traces
 """
 
 import argparse
-import random
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 # Schema groups for convenience
-OTEL_SCHEMAS = ["otap", "otlp_metrics", "otlp_traces", "otlpmetricsdict", "otlptracesdict"]
+# Note: Only train schemas that use protobuf format (OTAP uses Arrow IPC, doesn't need OpenZL)
+# otlpmetricsdict/otlptracesdict use same protobuf schema as otlp_metrics/otlp_traces
+OTEL_SCHEMAS = ["otlp_metrics", "otlp_traces"]
 TPCH_SCHEMAS = ["tpch_proto"]
 ALL_SCHEMAS = OTEL_SCHEMAS + TPCH_SCHEMAS
 
@@ -34,11 +38,8 @@ def discover_data_folders(data_dir: Path) -> dict[str, list[Path]]:
         e.g., {"otap": [...], "otlp_metrics": [...], "otlp_traces": [...], "tpch_proto": [...]}
     """
     schema_folders = {
-        "otap": [],
         "otlp_metrics": [],
         "otlp_traces": [],
-        "otlpmetricsdict": [],
-        "otlptracesdict": [],
         "tpch_proto": [],
     }
 
@@ -53,19 +54,10 @@ def discover_data_folders(data_dir: Path) -> dict[str, list[Path]]:
             continue
 
         # Categorize by schema
-        if "otelmetrics" in folder_name and "-otap-" in folder_name:
-            schema_folders["otap"].append(folder_path)
-        elif "otelmetrics" in folder_name and "-otlp-" in folder_name:
+        if "otelmetrics" in folder_name and "-otlp-" in folder_name:
             schema_folders["otlp_metrics"].append(folder_path)
-        elif "oteltraces" in folder_name and "-otap-" in folder_name:
-            schema_folders["otap"].append(folder_path)
         elif "oteltraces" in folder_name and "-otlp-" in folder_name:
             schema_folders["otlp_traces"].append(folder_path)
-        # OTLP with dictionary-encoded attribute keys
-        elif "otelmetrics" in folder_name and "-otlpmetricsdict-" in folder_name:
-            schema_folders["otlpmetricsdict"].append(folder_path)
-        elif "oteltraces" in folder_name and "-otlptracesdict-" in folder_name:
-            schema_folders["otlptracesdict"].append(folder_path)
         # TPC-H proto format (only proto, not arrow)
         elif folder_name.startswith("tpch-") and "-proto-" in folder_name:
             schema_folders["tpch_proto"].append(folder_path)
@@ -73,21 +65,16 @@ def discover_data_folders(data_dir: Path) -> dict[str, list[Path]]:
     return schema_folders
 
 
-def sample_files_for_schema(
-    folders: list[Path], num_files: int = 100, seed: int = 42
-) -> list[Path]:
+def collect_files_for_schema(folders: list[Path]) -> list[Path]:
     """
-    Sample random payload files from all folders for a schema.
+    Collect all payload files from all folders for a schema.
 
     Args:
         folders: List of folder paths containing payloads
-        num_files: Number of files to sample total
-        seed: Random seed for reproducibility
 
     Returns:
-        List of sampled payload file paths
+        List of all payload file paths
     """
-    # Collect all payload files from all folders
     all_payloads = []
     for folder in folders:
         all_payloads.extend(folder.glob("payload_*.bin"))
@@ -95,16 +82,9 @@ def sample_files_for_schema(
     if not all_payloads:
         raise ValueError(f"No payload files found in {len(folders)} folders")
 
-    # Sample
-    random.seed(seed)
-    sample_size = min(num_files, len(all_payloads))
-    sampled = random.sample(all_payloads, sample_size)
+    print(f"  Found {len(all_payloads)} payload files across {len(folders)} folders")
 
-    print(
-        f"  Sampled {len(sampled)} files from {len(all_payloads)} total payloads across {len(folders)} folders"
-    )
-
-    return sampled
+    return all_payloads
 
 
 def prepare_schema_train_dir(
@@ -210,7 +190,7 @@ def parse_args():
         "--schema",
         type=str,
         default="all",
-        help="Schema(s) to train: 'all', 'otel', 'tpch', or specific schema name (otap, otlp_metrics, otlp_traces, otlpmetricsdict, otlptracesdict, tpch_proto)",
+        help="Schema(s) to train: 'all', 'otel', 'tpch', or specific schema name (otlp_metrics, otlp_traces, tpch_proto)",
     )
     return parser.parse_args()
 
@@ -238,7 +218,7 @@ def main():
     schema_list = get_schemas_to_train(args.schema)
 
     script_dir = Path(__file__).parent.resolve()
-    source_dir = script_dir.parent / "data" / "generated"
+    source_dir = script_dir.parent / "data" / "generated" / "train"  # Only use train data
     data_dir = script_dir.parent / "data"
 
     if not source_dir.exists():
@@ -251,7 +231,7 @@ def main():
     print("=" * 80)
     print("OpenZL Compressor Training")
     print(f"Training schemas: {', '.join(schema_list)}")
-    print("Sampling 100 files per schema type for training")
+    print("Using all files from train data for training")
     print("=" * 80)
     print()
 
@@ -280,11 +260,11 @@ def main():
         print(f"[{schema_name}] Processing...")
 
         try:
-            # Sample files from all folders for this schema
-            sampled_files = sample_files_for_schema(folders, num_files=100)
+            # Collect all files from all folders for this schema
+            all_files = collect_files_for_schema(folders)
 
             # Prepare training directory
-            train_dir = prepare_schema_train_dir(data_dir, schema_name, sampled_files)
+            train_dir = prepare_schema_train_dir(data_dir, schema_name, all_files)
 
             # Train compressor
             output_path = train_dir / "trained.zlc"
