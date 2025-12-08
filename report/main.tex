@@ -9,7 +9,7 @@
 \usepackage{float}
 
 \title[Format-Aware Compression]{Format-Aware Compression for Telemetry Data Transport: 
-Can Schema-Driven Optimization Match Native Columnar Protocols?}
+Can Format-Aware Compression Match Native Columnar Protocols?}
 
 \author{Danny Chin}
 \affiliation{%
@@ -32,8 +32,7 @@ Can Schema-Driven Optimization Match Native Columnar Protocols?}
 \begin{document}
 
 \begin{abstract}
-
-This paper investigates whether format-aware compression can match columnar protocols without requiring protocol migration. We evaluate OpenZL, a schema-driven compression framework, against OTel Arrow (OTAP) across five workloads. For telemetry data, OpenZL achieves 45--91\% of OTAP's compression ratio but cannot fully close the gap. Through an ablation study, we find that OTAP's sorting optimization is the key differentiator: when disabled, OpenZL outperforms OTAP in three of four workloads. However, for non-telemetry workloads like TPC-H, OpenZL performs competitively with Arrow, making it a viable alternative when domain-specific optimizations are not in play.
+No---at least not yet. We evaluate OpenZL, a schema-driven compression framework, against OTel Arrow (OTAP) across five workloads and find it achieves only 45--91\% of OTAP's compression ratio for telemetry data. Through an ablation study, we identify OTAP's sorting optimization as the key differentiator: when disabled, OpenZL outperforms OTAP in three of four workloads. However, for TPC-H LineItem, a table with flat schema, OpenZL outperforms Arrow in our evaluation, suggesting the gap may stem from OTAP's domain-specific optimizations rather than inherent format limitations.
 \end{abstract}
 
 \maketitle
@@ -490,11 +489,11 @@ OpenZL requires training data collection and periodic retraining as workload cha
 
 \section{Conclusion}
 
-This paper investigated whether format-aware compression can bridge the efficiency gap between row-oriented and columnar telemetry protocols. We evaluated OpenZL against OTAP across five workloads and found that while OpenZL improves upon standard compression for row-oriented data, it achieves only 45--91\% of OTAP's compression ratio for OTel workloads at large batch sizes.
+For telemetry data, format-aware compression cannot fully replace columnar protocols. We evaluated OpenZL against OTAP across five workloads and found that while OpenZL improves upon standard compression for row-oriented data, it achieves only 45--91\% of OTAP's compression ratio for OTel workloads at large batch sizes.
 
 Our ablation study revealed that OTAP's advantage stems primarily from dictionary encoding and sorting optimizations. Dictionary encoding is essential---without it, OTAP performs 2--6x worse than OTLP+zstd. When sorting is disabled, OTLP+OpenZL outperforms OTAP in three of four OTel workloads, demonstrating that sorting creates compression patterns that row-oriented formats cannot easily replicate due to their hierarchical structure.
 
-For non-OTel workloads like TPC-H, OpenZL performs competitively with Arrow, suggesting that format-aware compression is a viable alternative when domain-specific optimizations are not in play. However, for telemetry data where OTAP has been extensively optimized, protocol migration remains the path to maximum compression efficiency.
+For flat schemas like TPC-H, OpenZL outperforms Arrow in our evaluation, suggesting that format-aware compression may be a viable alternative when domain-specific optimizations are not in play. However, for telemetry data where OTAP has been extensively optimized, protocol migration remains the path to maximum compression efficiency.
 
 \bibliographystyle{ACM-Reference-Format}
 \bibliography{refs}
