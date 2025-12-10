@@ -1,7 +1,8 @@
 @misc{parquet,
   title = {Apache Parquet},
   howpublished = {\url{https://parquet.apache.org/}},
-  note = {Accessed: 2024-12-03}
+  year = {2025},
+  note = {Accessed: 2025-12-03}
 }
 
 @inproceedings{orc,
@@ -23,7 +24,8 @@
 @misc{otel-arrow,
   title = {OpenTelemetry Arrow Protocol},
   howpublished = {\url{https://github.com/open-telemetry/otel-arrow}},
-  note = {Accessed: 2024-12-03}
+  year = {2025},
+  note = {Accessed: 2025-12-03}
 }
 
 @inproceedings{gorilla,
@@ -130,6 +132,33 @@
   title = {openzl-row-col},
   author = {Chin, Danny and Mamidipaka, Pragna},
   howpublished = {\url{https://github.com/danielthank/openzl-row-col}},
-  year = {2024},
+  year = {2025},
   note = {Benchmark code and data generation tools}
+}
+
+@misc{aws-data-transfer,
+  title = {Amazon EC2 On-Demand Pricing},
+  author = {{Amazon Web Services}},
+  howpublished = {\url{https://aws.amazon.com/ec2/pricing/on-demand/}},
+  year = {2025},
+  note = {Accessed: 2025-12-10}
+}
+
+@article{f3,
+author = {Zeng, Xinyu and Meng, Ruijun and Prammer, Martin and McKinney, Wes and Patel, Jignesh M. and Pavlo, Andrew and Zhang, Huanchen},
+title = {F3: The Open-Source Data File Format for the Future},
+year = {2025},
+issue_date = {September 2025},
+publisher = {Association for Computing Machinery},
+address = {New York, NY, USA},
+volume = {3},
+number = {4},
+url = {https://doi.org/10.1145/3749163},
+doi = {10.1145/3749163},
+abstract = {Columnar storage formats are the foundation for modern data analytics systems. The proliferation of open-source file formats (i.e., Parquet, ORC) allows seamless data sharing across disparate platforms. However, these formats were created over a decade ago for hardware and workload environments that are much different from today. Although these formats have incorporated some updates to their specification to adapt to these changes, not all deployments support those modifications, and too often systems cannot overcome the formats' deficiencies and limitations without a rewrite.In this paper, we present the Future-proof File Format (F3) project. It is a next-generation open-source file format with interoperability, extensibility, and efficiency as its core design principles. F3 obviates the need to create a new format every time a shift occurs in data processing and computing by providing a data organization structure and a general-purpose API to allow developers to add new encoding schemes easily. Each self-describing F3 file includes both the data and meta-data, as well as WebAssembly (Wasm) binaries to decode the data. Embedding the decoders in each file requires minimal storage (kilobytes) and ensures compatibility on any platform in case native decoders are unavailable. To evaluate F3, we compared it against legacy and state-of-the-art open-source file formats. Our evaluations demonstrate the efficacy of F3's storage layout and the benefits of Wasm-driven decoding.},
+journal = {Proc. ACM Manag. Data},
+month = sep,
+articleno = {245},
+numpages = {27},
+keywords = {columnar storage, compression, extensibility, file format}
 }
